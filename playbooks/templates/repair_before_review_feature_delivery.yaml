@@ -1,0 +1,669 @@
+{
+  "playbook_id": "template_repair_before_review_feature_delivery",
+  "name": "Template - Repair-before-review feature delivery",
+  "authoring_notes": [
+    "Replace every __PLACEHOLDER__ before launch and lint with --strict.",
+    "Semantic checks are advisory-blocking LLM-as-judge gates: a failing verdict fails the step, but a passing verdict never substitutes for the deterministic gates next to it. The judge must resolve to a different harness/model route than the step's producer; __JUDGE_HARNESS__ defaults to the read-only pi_cli judge when the field is omitted.",
+    "Walking-skeleton convention: when the slice has user-visible behavior, add a minimal browser-smoke step (worker browser_smoke_runner, with file_hash_matches pins on the smoke manifest and check script) directly after step_05_implement_slice rather than waiting for closeout, so an end-to-end skeleton is proven before documentation and review. This is a template-authoring convention, not engine behavior. The template also ships a command-driven user smoke gate at step_08_user_smoke_gate that satisfies the strict-lint quality floor; specialize its manifest and replace its all-zeros pins before launch.",
+    "Review independence: step_09 declares role slice_reviewer, resolved from the top-level roles map. __REVIEWER_HARNESS__/__REVIEWER_MODEL__ must differ from __PRIMARY_HARNESS__/__PRIMARY_MODEL__ in both harness and model — a review step that inherits defaults.worker lets the producing route mark its own homework, and strict lint fails it with review-step-missing-independent-route.",
+    "Test-authoring discipline: step_04 writes only under tests/ and step_05 writes only the implementation. Keep those write scopes disjoint. Strict lint fails a code-producing playbook that has no test-only authoring step (code-playbook-test-authoring-not-disjoint) or writes no tests at all (code-playbook-missing-test-coverage).",
+    "User-simulation gate: step_08b declares role user_tester, resolved from the top-level roles map, and must differ from __PRIMARY_HARNESS__/__PRIMARY_MODEL__ in both harness and model for the same reason step_09's reviewer route must. It is not the deterministic smoke gate (step_08) replayed under a different name -- it is skills/test-as-lee.md's protocol run for real against a live instance, with the LLM deciding how to pursue each natural-language journey in journeys/user_journeys_manifest.json. It is an evaluator, never a second producer: its allowed_paths exclude __PROJECT_SRC__/ and tests/ so the changed-path policy rejects any product edit, and a journey failure routes back to step_07 through on_fail.repair, which repairs and then re-runs the tests, the smoke gate, and this step. Specialize its manifest and replace its all-zeros pin before launch, the same as step_08.",
+    "User-simulation evidence: user_journeys_all_passed proves the result artifact names every pinned journey as passed; on its own that is a claim, not evidence -- the same gap checks_run_match was built to close for review verdicts. The paired user_journeys_execution_verified system rule re-executes each journey's commands_run claims against the manifest's pinned command_allowlist (argv-prefix matching, never through a shell) and fails the step when a claimed exit code or stdout_contains substring does not reproduce, when zero claims were verifiable, or when any journey carries no re-executable claim at all. Set command_allowlist to the argv prefixes that actually start this application. Note the honest limit: this proves the claim is true of the running application, not that the tester personally produced it -- exactly as checks_run_match cannot prove the reviewer ran the suite. What it removes is a result artifact asserting outcomes that never happened.",
+    "Journey manifest location: the manifest lives under journeys/, not tests/, and that is load-bearing rather than cosmetic. It is the list of journeys a run must pass, so no step that writes the implementation may also be able to edit it — otherwise a repair attempt facing a failing journey can narrow the list instead of fixing what it exposed. step_04_author_slice_tests writes journeys/ and tests/; step_07_repair_and_verify_slice writes tests/ but NOT journeys/, so it can still add regression tests while the journey list stays beyond its reach. Hash-pinning buys the same guarantee and is better when the manifest already exists in the workspace, but it cannot be used on a first run: pinning a file the run itself creates trips the self-created-oracle-pin guardrail. Write scope is the protection that works in both cases. Strict lint checks it with user-journeys-manifest-writable-by-producer.",
+    "Journey authority and traceability: manifest journeys carry authority (human > mission > author > exploratory, defaulting to author) and traces_to, a list of enumerated AC-N acceptance-check IDs from the slice contract. The author may add journeys but must never weaken or remove a higher-authority one; put human- and mission-owned journeys in a file outside the author's write scope and point the rule's seed_path at it to enforce that. Every non-exploratory journey needs a non-empty traces_to, and every AC-N in the contract at contract_path must be covered by at least one of them -- which is why step_01 requires the contract to enumerate its acceptance checks as AC-1, AC-2 and so on. Exploratory journeys need no traceability and are encouraged: they supplement traced journeys, never replace them, and a failing exploratory journey fails the gate exactly like a traced one.",
+    "Strict lint requires this step whenever a smoke step exists (code-playbook-missing-user-simulation-gate), requires it to declare an independent route (user-tester-step-missing-independent-route), forbids it from writing implementation or test paths (user-tester-step-writes-product), requires its repair edge (user-simulation-gate-missing-repair-edge) and its execution-evidence rule (user-simulation-gate-missing-execution-evidence), and fails a manifest, seed, or contract path nothing produces (user-journeys-missing-manifest-contract)."
+  ],
+  "defaults": {
+    "worker": "claude_code",
+    "retry_policy": {
+      "max_attempts": 2,
+      "strategy": "rerun_with_validation_feedback"
+    }
+  },
+  "roles": {
+    "slice_reviewer": {
+      "harness": "__REVIEWER_HARNESS__",
+      "model": "__REVIEWER_MODEL__"
+    },
+    "user_tester": {
+      "harness": "__USER_TESTER_HARNESS__",
+      "model": "__USER_TESTER_MODEL__"
+    }
+  },
+  "run_policy": {
+    "on_step_failure": "halt",
+    "require_validation_pass_to_advance": true
+  },
+  "steps": [
+    {
+      "step_id": "step_01_define_slice_contract",
+      "name": "Define the slice contract",
+      "mission": "Before writing, read AGENTS.md and follow the repo operating rules. Replace the placeholder slice name, contract path, and acceptance details with the real feature details for lee-kb before use. Create the contract doc under docs/ and define the problem, required outputs, constraints, validation, routing intent, and acceptance checks under the Overview, Problem, Constraints, and Acceptance Checks headings, with at least 120 non-whitespace characters under each required heading. Enumerate every acceptance check with an explicit ID of the form AC-1, AC-2, AC-3 and so on, one per check. Downstream gates match those IDs literally: the user-simulation gate requires every AC-N in this document to be covered by at least one user journey citing it in traces_to, so an unnumbered or renumbered check is an uncoverable check. Keep all writes within docs/.",
+      "inputs": [
+        "AGENTS.md",
+        "product-definition.md",
+        "design.md",
+        "architecture.md",
+        "docs/repair-before-review-pattern.md"
+      ],
+      "allowed_paths": [
+        "docs/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "docs/__SLICE_NAME__-contract.md",
+            "type": "markdown"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "docs/__SLICE_NAME__-contract.md"
+          },
+          {
+            "type": "markdown_headings_present",
+            "path": "docs/__SLICE_NAME__-contract.md",
+            "headings": [
+              "Overview",
+              "Problem",
+              "Constraints",
+              "Acceptance Checks"
+            ],
+            "min_chars_under_heading": 120
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the slice contract so it is concrete, constrained, and written under docs/ with at least 120 non-whitespace characters under every required heading.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_02_approve_contract",
+      "type": "human_approval",
+      "name": "Approve the slice contract",
+      "mission": "Human gate: read docs/__SLICE_NAME__-contract.md and decide whether the contract describes the slice you actually want built, with acceptance checks concrete enough to verify. The run parks in WAITING_APPROVAL until you approve with `agent-orch approve <run_dir> step_02_approve_contract` and resume with `agent-orch resume-run <run_dir>`. Approval is never implicit.",
+      "inputs": [
+        "docs/__SLICE_NAME__-contract.md"
+      ]
+    },
+    {
+      "step_id": "step_03_plan_slice_delivery",
+      "name": "Plan the implementation",
+      "mission": "Before writing, read AGENTS.md and follow the repo operating rules. Read the contract for lee-kb and turn it into a concrete implementation plan covering Architecture, Tests, Verification, and Risks, with at least 120 non-whitespace characters under each required heading. Every acceptance check in the contract must map to a concrete plan item; a traceability judge verifies this and fails the step naming any criterion it cannot map. Replace the placeholder plan path and work items with the real slice details before use. Keep all writes within plans/.",
+      "inputs": [
+        "AGENTS.md",
+        "docs/__SLICE_NAME__-contract.md",
+        "docs/repair-before-review-pattern.md",
+        "architecture.md"
+      ],
+      "allowed_paths": [
+        "plans/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "plans/__SLICE_NAME__-implementation-plan.md",
+            "type": "markdown"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "plans/__SLICE_NAME__-implementation-plan.md"
+          },
+          {
+            "type": "markdown_headings_present",
+            "path": "plans/__SLICE_NAME__-implementation-plan.md",
+            "headings": [
+              "Architecture",
+              "Tests",
+              "Verification",
+              "Risks"
+            ],
+            "min_chars_under_heading": 120
+          }
+        ],
+        "semantic": [
+          {
+            "type": "semantic_check",
+            "path": "plans/__SLICE_NAME__-implementation-plan.md",
+            "mode": "contract_traceability",
+            "reference_path": "docs/__SLICE_NAME__-contract.md",
+            "judge_harness": "__JUDGE_HARNESS__"
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the implementation plan so it has at least 120 non-whitespace characters under each required heading, is concrete about code, tests, verification, routing, and risks, every contract acceptance check maps to a plan item, and keep all writes inside plans/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_04_author_slice_tests",
+      "name": "Author the slice tests",
+      "mission": "Before writing, read AGENTS.md, skills/development-loop.md, and skills/test-as-lee.md, then follow them. Author the targeted test suite for the slice contract before the implementation exists, so the tests encode the contract rather than the implementation. Replace the placeholder test path and case names with the real slice details before use. The tests may fail until the implementation lands, but they must be syntactically valid and import-guarded where needed. Keep all writes within tests/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/development-loop.md",
+        "skills/test-as-lee.md",
+        "docs/__SLICE_NAME__-contract.md",
+        "plans/__SLICE_NAME__-implementation-plan.md"
+      ],
+      "allowed_paths": [
+        "tests/",
+        "journeys/"
+      ],
+      "routing": {
+        "primary": {
+          "harness": "__TEST_AUTHOR_HARNESS__",
+          "model": "__TEST_AUTHOR_MODEL__"
+        },
+        "fallback": {
+          "harness": "__FALLBACK_HARNESS__",
+          "model": "__FALLBACK_MODEL__"
+        }
+      },
+      "outputs": {
+        "required": [
+          {
+            "path": "tests/test___SLICE_MODULE__.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "tests/test___SLICE_MODULE__.py"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m compileall tests/test___SLICE_MODULE__.py"
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the slice tests so they encode the contract, compile cleanly, and stay inside tests/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_05_implement_slice",
+      "name": "Implement the slice",
+      "mission": "Before writing code, read AGENTS.md, skills/development-loop.md, and skills/test-as-lee.md, then follow them. Implement the slice against the tests authored in the previous step. Replace the placeholder module path, allowed paths, validation commands, routing intent, and any workflow-asset paths with the real slice details before use. If the slice owns workflow files, specialize the playbook paths before running it. Do not modify tests/ — the test suite was authored separately and judges this step. Keep all writes within __PROJECT_SRC__/ and playbooks/ when the slice needs workflow assets.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/development-loop.md",
+        "skills/test-as-lee.md",
+        "docs/__SLICE_NAME__-contract.md",
+        "plans/__SLICE_NAME__-implementation-plan.md",
+        "tests/test___SLICE_MODULE__.py"
+      ],
+      "allowed_paths": [
+        "__PROJECT_SRC__/",
+        "playbooks/"
+      ],
+      "execution": {
+        "task_type": "__TASK_TYPE__",
+        "capabilities_required": [
+          "__CAPABILITY__"
+        ],
+        "routing_hints": {
+          "preferred_harness": "__PRIMARY_HARNESS__"
+        }
+      },
+      "routing": {
+        "primary": {
+          "harness": "__PRIMARY_HARNESS__",
+          "model": "__PRIMARY_MODEL__"
+        },
+        "fallback": {
+          "harness": "__FALLBACK_HARNESS__",
+          "model": "__FALLBACK_MODEL__"
+        }
+      },
+      "outputs": {
+        "required": [
+          {
+            "path": "__PROJECT_SRC__/__SLICE_MODULE__.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "__PROJECT_SRC__/__SLICE_MODULE__.py"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/test___SLICE_MODULE__.py",
+            "require_collected_tests": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the implementation until the separately authored slice tests pass cleanly. Keep all writes inside __PROJECT_SRC__/ and playbooks/ and do not touch tests/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_06_document_slice",
+      "name": "Document the slice",
+      "mission": "Before writing, read AGENTS.md and skills/documentation.md, then follow them. Update the user-facing docs that explain the slice and replace the placeholder doc references and required headings with the real files and sections the slice needs. The template-required exact Markdown headings are __README_REQUIRED_HEADING__ in README.md and __USER_GUIDE_REQUIRED_HEADING__ in user-guide.md; after specialization, use those exact heading texts without synonyms, prefixes, or suffixes, with at least 80 non-whitespace characters under each required heading. Keep all writes within README.md and user-guide.md.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/documentation.md",
+        "docs/__SLICE_NAME__-contract.md",
+        "plans/__SLICE_NAME__-implementation-plan.md",
+        "__PROJECT_SRC__/__SLICE_MODULE__.py",
+        "tests/test___SLICE_MODULE__.py"
+      ],
+      "allowed_paths": [
+        "README.md",
+        "user-guide.md"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "README.md",
+            "type": "markdown"
+          },
+          {
+            "path": "user-guide.md",
+            "type": "markdown"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "README.md"
+          },
+          {
+            "type": "markdown_headings_present",
+            "path": "README.md",
+            "headings": [
+              "__README_REQUIRED_HEADING__"
+            ],
+            "min_chars_under_heading": 80
+          },
+          {
+            "type": "file_exists",
+            "path": "user-guide.md"
+          },
+          {
+            "type": "markdown_headings_present",
+            "path": "user-guide.md",
+            "headings": [
+              "__USER_GUIDE_REQUIRED_HEADING__"
+            ],
+            "min_chars_under_heading": 80
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the slice documentation so the feature is discoverable and understandable from the docs alone, including exact Markdown headings __README_REQUIRED_HEADING__ and __USER_GUIDE_REQUIRED_HEADING__ with at least 80 non-whitespace characters under each required heading. Keep all writes inside README.md and user-guide.md.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_07_repair_and_verify_slice",
+      "name": "Repair and verify the slice",
+      "mission": "Before writing, read AGENTS.md, skills/development-loop.md, skills/test-as-lee.md, and skills/documentation.md, then follow them. Repair any remaining slice failures so the implementation, tests, docs, and routing fields are all green before review. If this step was re-entered from a failed review verdict, the findings to repair are in your retry feedback — fix those findings first. If it was re-entered from a failed user-simulation gate, read artifacts/user-test/result.json: its findings array carries the reproduction, expected vs actual behavior, tester observations, and captured artifacts for every user-visible defect the independent tester found. Reproduce each one yourself before fixing it, fix the product rather than the journey, and do not edit journeys/user_journeys_manifest.json — it is hash-pinned precisely so a failing journey cannot be narrowed away instead of repaired. Run the full verification set for the slice plus any real CLI proof commands that belong to the feature. Keep all writes within __PROJECT_SRC__/, tests/, playbooks/, README.md, user-guide.md, docs/, plans/, and tmp/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/development-loop.md",
+        "skills/test-as-lee.md",
+        "skills/documentation.md",
+        "docs/__SLICE_NAME__-contract.md",
+        "plans/__SLICE_NAME__-implementation-plan.md",
+        "README.md",
+        "user-guide.md",
+        "artifacts/user-test/result.json",
+        "__PROJECT_SRC__/__SLICE_MODULE__.py",
+        "tests/test___SLICE_MODULE__.py"
+      ],
+      "allowed_paths": [
+        "__PROJECT_SRC__/",
+        "tests/",
+        "playbooks/",
+        "README.md",
+        "user-guide.md",
+        "docs/",
+        "plans/",
+        "tmp/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "__PROJECT_SRC__/__SLICE_MODULE__.py",
+            "type": "text"
+          },
+          {
+            "path": "tests/test___SLICE_MODULE__.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "__PROJECT_SRC__/__SLICE_MODULE__.py"
+          },
+          {
+            "type": "file_exists",
+            "path": "tests/test___SLICE_MODULE__.py"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest",
+            "require_collected_tests": true,
+            "timeout_seconds": 600
+          },
+          {
+            "type": "command_succeeds",
+            "command": "BLACK_NUM_WORKERS=1 python3 -m black --check __PROJECT_SRC__ tests"
+          },
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m ruff check __PROJECT_SRC__ tests"
+          },
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m compileall src tests"
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the slice until full verification is green and the implementation is ready for review. Keep all writes inside the declared paths.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_08_user_smoke_gate",
+      "name": "Run the user smoke gate for the slice",
+      "worker": "smoke_runner",
+      "mission": "Run the canonical smoke manifest for the slice and capture evidence under artifacts/user-smoke/. Specialize before launch: point tests/smoke_manifest.json at the slice's real user flow and replace the all-zeros sha256 placeholders on this step with real pins (shasum -a 256 <file>) so earlier steps cannot rewrite the smoke oracle. An unedited template fails this gate honestly at the pin check.",
+      "inputs": [
+        "tests/smoke_manifest.json",
+        "__PROJECT_SRC__/__SLICE_MODULE__.py"
+      ],
+      "allowed_paths": [
+        "artifacts/user-smoke"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "artifacts/user-smoke/result.json",
+            "type": "json"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "artifacts/user-smoke/result.json"
+          },
+          {
+            "type": "json_parse",
+            "path": "artifacts/user-smoke/result.json"
+          },
+          {
+            "type": "file_hash_matches",
+            "path": "tests/smoke_manifest.json",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "type": "file_hash_matches",
+            "path": "__SMOKE_CHECK_SCRIPT__",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the slice (or the specialized smoke manifest and pins) until the user smoke gate passes with evidence under artifacts/user-smoke/. All-zeros pins mean this template step was never specialized.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_08b_user_simulation_gate",
+      "role": "user_tester",
+      "name": "Run the user-simulation gate for the slice",
+      "mission": "Before writing, read AGENTS.md, skills/development-loop.md, and skills/test-as-lee.md, then follow the TEST AS LEE protocol directly against a real running instance of the slice — not the deterministic smoke script, which only replays a fixed path. You are an independent evaluator, not a second implementer: observe, reproduce, evidence, and report. Do NOT fix the product. Your allowed_paths deliberately exclude __PROJECT_SRC__/ and tests/, so any attempt to repair the slice fails the changed-path policy; a journey failure routes back to step_07_repair_and_verify_slice, which repairs it and re-runs the deterministic tests, the smoke gate, and this step. The only thing you may repair is your own testing environment under tmp/. Start the application the way a real user would. Attempt every journey named in journeys/user_journeys_manifest.json (natural-language goals, not literal commands — decide how to pursue each one yourself, the way a user would). If you find yourself thinking a user probably won't try that, that is exactly what to test next; add exploratory journeys of your own to the result beyond the manifest's, and report what they find. Specialize before launch: replace the placeholder journeys in journeys/user_journeys_manifest.json with the slice's real user goals, give every non-exploratory journey a traces_to list citing the enumerated AC-N acceptance-check IDs it covers, declare command_allowlist with the argv prefixes that start this application, and replace the all-zeros sha256 placeholder on this step with the real pin (shasum -a 256 journeys/user_journeys_manifest.json) so a later repair attempt cannot narrow the journey list instead of fixing what it exposed. Write artifacts/user-test/result.json with two arrays. journeys: every manifest journey by name plus any exploratory ones, each with status, a concrete steps_taken account of what you actually did, and commands_run listing every command you actually executed with its real exit_code and optionally a stdout_contains substring you actually saw — the orchestrator re-executes the allowlisted ones and fails this step on any mismatch, so a claim you did not run is worse than no claim. findings: one entry per failure, each with id, severity (Critical/High/Medium/Low), the journey name, problem, reproduction, expected, actual, optional observations, proposed_fix, and artifacts listing files you captured under artifacts/user-test/ (terminal transcripts, logs, screenshots). Every referenced artifact must exist and be non-empty. Write the finding for someone who did not watch you find it. Every journey named in the pinned manifest must appear in the result — omitting a failing journey does not make it pass. Also maintain artifacts/user-test/findings-log.md as an append-only record: read whatever is already there, keep every existing entry byte-for-byte, and append a new dated section for this pass listing each finding you filed (or stating that this pass found none). result.json is overwritten every time you run, so after a repair it shows only that the journeys now pass; the log is the only place the independent reviewer can see what was originally wrong and judge whether the repair addressed it or merely made the journey stop failing. Never rewrite or prune it. Keep all writes within artifacts/user-test and tmp/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/development-loop.md",
+        "skills/test-as-lee.md",
+        "docs/__SLICE_NAME__-contract.md",
+        "journeys/user_journeys_manifest.json",
+        "artifacts/user-smoke/result.json",
+        "__PROJECT_SRC__/__SLICE_MODULE__.py"
+      ],
+      "allowed_paths": [
+        "artifacts/user-test",
+        "tmp/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "artifacts/user-test/result.json",
+            "type": "json"
+          },
+          {
+            "path": "artifacts/user-test/findings-log.md",
+            "type": "markdown"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "artifacts/user-test/result.json"
+          },
+          {
+            "type": "file_exists",
+            "path": "artifacts/user-test/findings-log.md"
+          },
+          {
+            "type": "json_parse",
+            "path": "artifacts/user-test/result.json"
+          },
+          {
+            "type": "file_hash_matches",
+            "path": "journeys/user_journeys_manifest.json",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "type": "user_journeys_all_passed",
+            "path": "artifacts/user-test/result.json",
+            "manifest_path": "journeys/user_journeys_manifest.json",
+            "contract_path": "docs/__SLICE_NAME__-contract.md"
+          }
+        ],
+        "system": [
+          {
+            "type": "user_journeys_execution_verified",
+            "path": "artifacts/user-test/result.json",
+            "manifest_path": "journeys/user_journeys_manifest.json",
+            "timeout_seconds": 120
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the user-test report, not the product: every journey named in the pinned journeys/user_journeys_manifest.json must appear in artifacts/user-test/result.json with a concrete steps_taken account, commands_run entries whose exit codes and stdout_contains claims actually reproduce, and a structured finding with reproduction/expected/actual/proposed_fix and non-empty artifacts for every failure. All-zeros pins mean this template step was never specialized.",
+        "after_retries_exhausted": "halt",
+        "repair": {
+          "step_id": "step_07_repair_and_verify_slice",
+          "max_cycles": 2
+        }
+      }
+    },
+    {
+      "step_id": "step_09_review_verified_slice",
+      "role": "slice_reviewer",
+      "name": "Review the verified slice",
+      "mission": "Before writing, read AGENTS.md, skills/code-review.md, skills/documentation.md, agents/README.md, and agents/code-reviewer.md, then follow them directly in this step. Review the verified slice and record findings under code-reviews/. Run at least python3 -m pytest tests/ -q and list its real exit code so checks_run_match has a re-executable check. Write the prose review to code-reviews/review-__SLICE_NAME__.md with the Checks Run and Lens Notes sections, with at least 40 non-whitespace characters under each required heading, and write the machine-readable verdict to code-reviews/review-__SLICE_NAME__.verdict.json using the canonical review verdict schema contract (verdict pass/fail, findings array with id/severity/file/location/problem/proposed_fix, checks_run array, and lenses). lenses must be an object mapping lens names to objects; each lens object must contain either a non-empty finding_ids array or a non-empty justification string (or both). Every check you actually ran must be listed with its real exit code (the orchestrator re-executes via checks_run_match and fails on mismatch unless the rule is advisory). A verdict with Critical or High findings routes the run back to the repair step instead of advancing. Review both halves of this slice: the implementation, and the user-facing defects an independent tester found in it. artifacts/user-test/result.json holds the final user-test report and journeys/user_journeys_manifest.json the pinned journeys it was judged against. result.json is overwritten on every user-test pass, so after a repair it shows only that the journeys now pass — artifacts/user-test/findings-log.md is the append-only record of what was originally wrong, and it is where you read the findings the repair was supposed to address. For every finding recorded there, judge whether the repair actually addressed the reported problem or merely made the journey stop failing, and say so explicitly under Lens Notes. A defect that was suppressed rather than fixed is a High finding. Keep all writes within code-reviews/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/code-review.md",
+        "skills/documentation.md",
+        "agents/README.md",
+        "agents/code-reviewer.md",
+        "docs/__SLICE_NAME__-contract.md",
+        "plans/__SLICE_NAME__-implementation-plan.md",
+        "README.md",
+        "user-guide.md",
+        "artifacts/user-test/result.json",
+        "artifacts/user-test/findings-log.md",
+        "journeys/user_journeys_manifest.json",
+        "__PROJECT_SRC__/__SLICE_MODULE__.py",
+        "tests/test___SLICE_MODULE__.py"
+      ],
+      "allowed_paths": [
+        "code-reviews/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "code-reviews/review-__SLICE_NAME__.md",
+            "type": "markdown"
+          },
+          {
+            "path": "code-reviews/review-__SLICE_NAME__.verdict.json",
+            "type": "json"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "code-reviews/review-__SLICE_NAME__.md"
+          },
+          {
+            "type": "markdown_headings_present",
+            "path": "code-reviews/review-__SLICE_NAME__.md",
+            "headings": [
+              "Checks Run",
+              "Lens Notes"
+            ],
+            "min_chars_under_heading": 40
+          },
+          {
+            "type": "json_schema",
+            "path": "code-reviews/review-__SLICE_NAME__.verdict.json",
+            "schema_path": "builtin:review_verdict/v1"
+          },
+          {
+            "type": "review_verdict_clean",
+            "path": "code-reviews/review-__SLICE_NAME__.verdict.json",
+            "severity_threshold": "High"
+          }
+        ],
+        "system": [
+          {
+            "type": "checks_run_match",
+            "path": "code-reviews/review-__SLICE_NAME__.verdict.json",
+            "timeout_seconds": 600
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the review artifacts so the prose review has at least 40 non-whitespace characters under Checks Run and Lens Notes, the verdict JSON honestly reflects the verified slice, the verdict matches the schema, and every claimed check result matches what the commands actually return. Keep all writes inside code-reviews/.",
+        "after_retries_exhausted": "halt",
+        "repair": {
+          "step_id": "step_07_repair_and_verify_slice",
+          "max_cycles": 2
+        }
+      }
+    },
+    {
+      "step_id": "step_10_closeout_handoff_docs",
+      "name": "Close out the sprint and handoff docs",
+      "mission": "Before writing, read AGENTS.md and skills/documentation.md, then follow them. Update context.md, result-review.md, sprint-plan.md, and WHERE_AM_I.md for handoff after the review artifacts exist. The handoff must honestly reflect the review verdict — a semantic judge checks the closeout against the verdict artifact and fails this step when they contradict. context.md must include the exact Markdown headings Snapshot and What's Happening Now with at least 80 non-whitespace characters under each required heading. Record any stable architecture decision in architecture.md if needed. Keep all writes within context.md, result-review.md, sprint-plan.md, WHERE_AM_I.md, and architecture.md.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/documentation.md",
+        "code-reviews/review-__SLICE_NAME__.md",
+        "code-reviews/review-__SLICE_NAME__.verdict.json",
+        "context.md",
+        "result-review.md",
+        "sprint-plan.md",
+        "WHERE_AM_I.md",
+        "architecture.md"
+      ],
+      "allowed_paths": [
+        "context.md",
+        "result-review.md",
+        "sprint-plan.md",
+        "WHERE_AM_I.md",
+        "architecture.md"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "result-review.md",
+            "type": "markdown"
+          },
+          {
+            "path": "context.md",
+            "type": "markdown"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "result-review.md"
+          },
+          {
+            "type": "file_exists",
+            "path": "context.md"
+          },
+          {
+            "type": "markdown_headings_present",
+            "path": "context.md",
+            "headings": [
+              "Snapshot",
+              "What's Happening Now"
+            ],
+            "min_chars_under_heading": 80
+          }
+        ],
+        "semantic": [
+          {
+            "type": "semantic_check",
+            "path": "context.md",
+            "question": "Does the updated handoff state in context.md accurately and honestly describe the delivered slice as recorded in the reference review verdict, without contradicting the verdict, omitting its gating findings, or claiming verification results the verdict does not support?",
+            "reference_path": "code-reviews/review-__SLICE_NAME__.verdict.json",
+            "judge_harness": "__JUDGE_HARNESS__"
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the handoff docs so the verified and reviewed slice is clearly and honestly recorded for the next session, consistent with the review verdict, with exact Markdown headings Snapshot and What's Happening Now in context.md and at least 80 non-whitespace characters under each required heading. Keep all writes inside the declared paths.",
+        "after_retries_exhausted": "halt"
+      }
+    }
+  ]
+}
