@@ -131,13 +131,21 @@ dependencies, and starting the email connector (see Next Actions Queue).
 
 ## Next Actions Queue
 
+Priority order locked by Lee 2026-08-03 after Sprint 1 review: real-corpus
+information first, parity blockers second, correctness third, benchmark
+contract fourth, measurement fifth.
+
 | Rank | Action | Owner | Done When |
 |------|--------|-------|-----------|
-| 1 | Locate or provision the real `knowledge/sources.toml` and Employee Zero source roots, then run `lee-kb sync` against them | Human + Builder | The full corpus (~1,200 documents, 15 roots) is synchronized and queryable |
-| 2 | Curate the real golden benchmark: replace the generated 20-question seed corpus with Lee's recurring Chief of Staff questions against the Employee Zero sources | Human + Builder | `docs/golden-baseline.md` reports results against the curated corpus, not the generated one |
-| 3 | Get explicit approval for `.docx`/`.xlsx`/`.pptx` parsing libraries, then register format handlers | Human approval + Builder | New dependencies approved; `FORMAT_HANDLERS` in `src/lee_kb/connectors/local_files.py` covers office formats; tests added |
-| 4 | Implement the Outlook/Microsoft 365 email connector | Human + Planner | Connector scoped, approved, and implemented against the `Connector` contract |
-| 5 | Resolve Open Question 1 (Employee Zero parity scope for live mission status and dossier validation) | Human + Planner | Parity scope decision recorded in `architecture.md` or `product-definition.md` |
+| 1 | Run against the Employee Zero corpus: point config at the real `knowledge/sources.toml` (~1,200 documents, 15 roots), `lee-kb sync`, and answer Lee's daily questions | Human + Builder | The full corpus is synchronized and queryable; findings about realistic load recorded |
+| 2 | Approve `.docx`/`.xlsx`/`.pptx` parsing libraries and register format handlers (parity is impossible without them; the real corpus contains office documents) | Human approval + Builder | Dependencies approved and added; `FORMAT_HANDLERS` covers office formats; unhandled include-matched files are reported, not silently invisible; tests added |
+| 3 | Fix S1-R-14: `discover()` and `_resolve()` must share one resolved root base (correctness; fix before any customer deployment) | Builder | A directly built `RootConfig` over a symlinked root discovers and fetches consistently; regression test added |
+| 4 | Assert the retrieval baseline in the harness (S1-R-16): compute hit-at-1/hit-at-10/MRR and fail if they regress from `docs/golden-baseline.md` beyond a stated tolerance | Builder | The benchmark is a contract, not documentation |
+| 5 | Measure OR-search fetch-to-exhaustion on the real corpus (measure before optimizing) | Builder | Latency/volume numbers recorded for common-word queries over ~1,200 documents |
+| 6 | File the Agent-Orch defect: continuation runs record `launch: null`, making crashed continuations unresumable | Human + Platform | Backlog item exists in agent-orch with the OS1-contract reference |
+| 7 | Curate the real golden benchmark from Lee's recurring Chief of Staff questions (informed by rank 1's experience) | Human + Builder | `docs/golden-baseline.md` reports results against the curated corpus |
+| 8 | Implement the Outlook/Microsoft 365 email connector | Human + Planner | Connector scoped, approved, and implemented against the `Connector` contract |
+| 9 | Resolve Open Question 1 (Employee Zero parity scope for live mission status and dossier validation) | Human + Planner | Parity scope decision recorded in `architecture.md` or `product-definition.md` |
 
 ## Working Conventions
 
