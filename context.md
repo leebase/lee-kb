@@ -39,7 +39,14 @@ and chunks → SQLite → lexical evidence with citations, freshness, and receip
 ### In Progress
 
 - ⏳ Define the first vertical slice's domain contracts and acceptance tests.
-- ⏳ Select the second connector after the local-file connector.
+
+### Recently Decided (2026-08-03 architecture review)
+
+- ✅ Architecture review completed: identity, journal, deletion, migration, retrieve() contract, surfaces, sync, config, evaluation, and projects all locked (see Decisions Locked).
+- ✅ Second connector selected: email, Outlook/Microsoft 365 first, Gmail as early follow-on.
+- ✅ Derived artifacts, ranking signals, retrieval surfaces, and projects added to `architecture.md` and `product-definition.md`.
+- ✅ v1 reframed as a reimplementation of the Employee Zero knowledge system (~1,200 documents, 15 source roots) with the parity acceptance criterion: the Chief of Staff switches off the old `kb` commands without losing capability.
+- ✅ Identity consumed from the Agent Board model; principal required on every retrieval; fail-closed.
 
 ## Decisions Locked
 
@@ -50,6 +57,24 @@ and chunks → SQLite → lexical evidence with citations, freshness, and receip
 | Connectors feed a normalized knowledge projection | Gives every source the same retrieval and governance path | 2026-08-03 |
 | Permission filtering precedes evidence delivery | Prevents unauthorized source content from reaching an AI model | 2026-08-03 |
 | Lexical retrieval comes before semantic retrieval | Validates the core evidence path with fewer moving parts | 2026-08-03 |
+| lee-kb is a platform, not an Agent-Orch subsystem | Consumers depend on lee-kb, lee-kb depends on connectors — never the reverse | 2026-08-03 |
+| Identity: item = (connector, source_object); chunk = (item, ordinal, content_hash) | Receipts store item ID + chunk ID + hash + locator + timestamp, so they stay verifiable after the projection evolves | 2026-08-03 |
+| Latest-state projection plus append-only sync journal | Answers "what changed" questions without full document versioning | 2026-08-03 |
+| Deletion = tombstone by default, purge as optional policy | Receipts stay resolvable; clients configure governance-driven purge later | 2026-08-03 |
+| Stored schema version + migration framework; wipe-and-resync is the v1 upgrade path | The projection is disposable; sources are authoritative | 2026-08-03 |
+| retrieve() contract: query, principal, top_k, filters, freshness, project | Filters are simple equality/range on connector, project, date, type, tags — no query language | 2026-08-03 |
+| Library is the product; CLI is the v1 surface; MCP server is Phase 2 | All surfaces exercise the same public retrieval API | 2026-08-03 |
+| Sync is user-driven (`lee-kb sync [...]`); daemons and watchers deferred | Freshness reporting makes staleness visible instead | 2026-08-03 |
+| Configuration is a public contract at `~/.config/lee-kb/config.toml` | Client deployments will depend on it; documented from day one | 2026-08-03 |
+| Golden evaluation corpus (~20 real questions) is a Sprint 1 deliverable | Semantic retrieval must measurably beat the lexical baseline before adoption | 2026-08-03 |
+| project field is required on every knowledge item; v1 uses `default` | Forces the tenancy/scoping boundary into the data model from day one at near-zero cost | 2026-08-03 |
+| Second connector is email, not GitHub | Broader product value: conversational knowledge, threading, distillation; every customer has email | 2026-08-03 |
+| Email provider order: Outlook/Microsoft 365 first, Gmail as early follow-on | Personal deployment and expected customer deployments live in the Microsoft ecosystem | 2026-08-03 |
+| v1 is a reimplementation of the Employee Zero knowledge system, not a greenfield product | Preserve the `knowledge/sources.toml` source roots and rebuild the projection; the old `.kb/index.sqlite` is not authoritative | 2026-08-03 |
+| v1 file formats: Markdown, plain text, .docx, .xlsx, .pptx | Support the formats the deployed Chief of Staff workflow actually uses | 2026-08-03 |
+| Identity reuses the Agent Board model; retrieval always requires a principal | One identity system for humans, machine identities, and AI employees; CLI defaults to Lee; evaluation is fail-closed | 2026-08-03 |
+| Golden corpus = ~20 real Chief of Staff questions plus negative cases | Measures correct evidence, citations, project scoping, and freshness — not plausible-looking text | 2026-08-03 |
+| v1 complete = the Chief of Staff can switch from the old `kb` commands to lee-kb without losing capability | Objective acceptance criterion; prevents drift into architecture astronautics | 2026-08-03 |
 
 ## Document Inventory
 
@@ -82,21 +107,21 @@ and chunks → SQLite → lexical evidence with citations, freshness, and receip
 
 ## Open Questions
 
-1. Which connector should follow local files: Outlook, GitHub, or another source?
-2. Which local document formats and filesystem roots belong in the personal release?
-3. Should the first user surface be a CLI, a library API, or both?
-4. What permission representation is sufficient for the single-user release while remaining extensible?
-5. What fields are required in the first retrieval receipt?
+1. Which Employee Zero workflow capabilities are in lee-kb's parity scope? KB freshness check, rebuild, FAQ loading, and search clearly are; live mission status and dossier validation may belong to consumers or a future Agent-Orch connector rather than the retrieval platform.
+2. Which parsing libraries are approved for .docx/.xlsx/.pptx? (Office formats require new runtime dependencies, which need explicit approval per project constraints.)
+3. Where does the Agent Board identity model live today, and what does lee-kb consume — a library, a service, or a shared schema?
 
 ## Next Actions Queue
 
 | Rank | Action | Owner | Done When |
 |------|--------|-------|-----------|
-| 1 | Define source, knowledge-item, chunk, evidence, and receipt contracts | Human + Builder | Contracts and tests are reviewed and documented |
-| 2 | Implement the local-file connector and SQLite repository | Builder | A changed file is incrementally synchronized and queryable |
-| 3 | Add deterministic chunking and lexical retrieval | Builder | Exact-token queries return ranked chunks |
-| 4 | Add provenance, permission checks, freshness, and retrieval receipts | Builder | Every result is filtered and auditable |
-| 5 | Choose and implement the second connector | Human + Planner | Connector is explicitly approved and scoped |
+| 1 | Inventory the existing Employee Zero kb implementation (`knowledge/sources.toml`, `python -m kb build`, consumers) as the v1 reference | Human + Planner | Reference behaviors and parity scope are documented |
+| 2 | Define source, knowledge-item, chunk, evidence, and receipt contracts | Human + Builder | Contracts and tests are reviewed and documented |
+| 3 | Implement the local-file connector and SQLite repository | Builder | A changed file is incrementally synchronized and queryable |
+| 4 | Add deterministic chunking and lexical retrieval | Builder | Exact-token queries return ranked chunks |
+| 5 | Add provenance, permission checks, freshness, and retrieval receipts | Builder | Every result is filtered and auditable |
+| 6 | Build the golden evaluation corpus and record the lexical baseline | Human + Builder | ~20 real Chief of Staff questions (plus negative cases) run as a test fixture with a recorded baseline |
+| 7 | Implement the Outlook/Microsoft 365 email connector (after local-file path is tested end to end) | Human + Planner | Connector scoped and approved |
 
 ## Working Conventions
 
