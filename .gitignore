@@ -1,0 +1,22 @@
+# Python bytecode and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local environments and build outputs
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Local databases and runtime state
+*.sqlite
+*.sqlite3
+*.db
+
+# Editor and operating-system metadata
+.DS_Store
+._*

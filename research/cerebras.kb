@@ -1,0 +1,367 @@
+# How We Built Our Knowledge Base
+
+> **Cerebras Blog · July 15, 2026**
+>
+> Employees ask our internal knowledge base more than **15,000 questions every day**. It's become one of the most widely adopted internal tools at the company since launching 3 months ago — used by **humans, automations, and agents**.
+
+---
+
+## The Problem
+
+At Cerebras, our teams work across data center operations, chip design, hardware, training, inference, cloud platform, and more. With hundreds of new employees joining every year, our communication channels were filling up with the same questions:
+
+- ❓ "Where can I find X?"
+- 🧑💻 "Who is the expert in Y?"
+- 📖 "What is Z?"
+
+We built **Cerebras Knowledge** to connect people and systems to useful information.
+
+### The Query Pipeline at a Glance
+
+```
+SOURCES          →  DISTILLATION  →  EMBEDDINGS       →  RETRIEVAL         →  FUSION + RERANK    →  SYNTHESIS
+Slack · Wiki        LLM Extractors   PGVector            Six lists in         RRF (k=60)            Answer
+Code · Incidents                     3072-dim · HNSW     parallel             → LLM rerank          + Citations
+```
+
+---
+
+## Meeting Data Where It Lives
+
+Finding information inside an organization is hard. The data is scattered across tools, and every quarter someone proposes the same "brilliant" fix: *let's record everything in one platform.* The dream of a single source of truth rarely works in practice.
+
+Information is generated wherever it's convenient and ergonomic:
+
+- 📝 Suggested edits in documents
+- 💬 Threads in Slack
+- 🐙 Code references in GitHub
+- 📋 Status metadata in Jira
+
+These platforms are tailor-made for their domains. Discussing a pull request in Google Docs would be a terrible experience.
+
+> **Design principle:** Require minimal change to existing behavior. Extract data from each platform directly.
+
+---
+
+## Anatomy of a Knowledge Base
+
+Our knowledge base provides three things:
+
+| Component | Purpose |
+|---|---|
+| 📥 **Ingestion platform** | Collecting and storing internal data |
+| 🔍 **Query platform** | Searching that data |
+| 🔐 **Auth & audit layer** | Authentication, authorization, auditing, and analytics |
+
+At the core is a **single Postgres table** holding embeddings, raw summaries, and metadata from many sources. The system continually ingests data and maintains a query-ready datastore.
+
+### One Table, One Interface
+
+Every source — from Slack threads to netlists — lands in the **same embeddings table**, and anything in that table is immediately queryable:
+
+```
+SLACK ─┐
+WIKI / CONFLUENCE ─┤
+CODE REPOS ────────┤      ┌─────────────────────────┐      MCP · WEB UI · AGENTS
+NETLISTS ──────────┼──►   │   ONE EMBEDDINGS TABLE  │  ──►  QUERY
+PRM DOCS ──────────┤      │  document · embedding   │
+CUSTOM DATABASES ──┘      │  metadata · source      │
+                          │  timestamps             │
+                          └─────────────────────────┘
+        ONE CONNECTOR PER SOURCE
+```
+
+Each data source defines **what the data is**, **how to connect to it**, and **how often it should be fetched**. Every embedding row follows the same interface, regardless of origin.
+
+---
+
+## 💬 Slack
+
+Slack was the most important data source — it's where the most up-to-date engineering discussions happen.
+
+### Why Raw Embeddings Weren't Enough
+
+Vector search alone was insufficient. Slack messages present several challenges:
+
+1. **Information density varies enormously** — "hey yeah sure mike" and a detailed kernel explanation are both messages.
+2. **Message lengths vary** — shorter messages frequently beat longer, detailed ones in cosine similarity.
+3. **Context dependency** — a message's meaning often depends on the surrounding conversation.
+
+### A Hybrid Approach: Four Complementary Signals
+
+| # | Technique | What It Catches |
+|---|---|---|
+| 01 | **Full-text search** | Exact tokens embeddings blur: error strings, flag names, hostnames. A pasted literal error is almost always the best evidence. |
+| 02 | **Embedding search** | Paraphrase. "Restore hangs after manifest load" ↔ "checkpoint stalls on the NFS mount" — different vocabulary, same problem. |
+| 03 | **Inverse document frequency** | Rare tokens (obscure config flags) outrank filler. "sounds good, thanks!" scores near zero once term rarity is considered. |
+| 04 | **Age decay** | Slack answers expire. When relevance is equal, the newer thread wins. |
+
+#### Example: Query `"restore hangs after manifest load"`
+
+| Result | Age | Verdict |
+|---|---|---|
+| ✅ `ERR_MANIFEST_TIMEOUT: restore hangs after manifest load.` | 3h ago | **Exact tokens** + rare token `ERR_MANIFEST_TIMEOUT` → boosted |
+| ✅ `Checkpoint stalls on the NFS mount — set CKPT_PREFETCH=4.` | 1d ago | **Paraphrase match**, rare `CKPT_PREFETCH`, recent wins tie |
+| ❌ `sounds good, thanks! will try that` | — | **False neighbor** — no rare tokens → penalized |
+| ⚠️ `restore hangs → use LEGACY_FETCHER=1.` | 8mo ago | Matches, but **decayed by age** |
+
+> No single scorer is trusted on its own. Each technique produces its own ranked view, fused at query time (see **Reranking**).
+
+### Socket Mode: Real-Time Ingestion
+
+We installed a Slack bot running in **Socket Mode** — Slack pushes every message event over a persistent WebSocket, giving real-time updates without polling and burning rate limits.
+
+**Event flow:**
+
+```
+SOCKET EVENT ──► ROUTE ──► @MENTION/DM ──► BOT REPLY
+                    │
+                    ├──► TRACKED CHANNEL ──► SYNC_WORKER
+                    │         ├──► DISTILL ──► THREAD VECTOR
+                    │         └──► BURST VECTORS
+                    └──► REINGEST_THREAD ──► UPSERT THREAD
+                              └──► RESET WATERMARKS
+```
+
+Key behaviors:
+
+- ⚡ Immediately **acknowledge** each event and **deduplicate** via stable event ID
+- 🧵 The ingest consumer **re-fetches the entire thread** (parent + all replies) — a reply re-pulls all siblings so content, participants, and timestamps always reflect the complete conversation
+- 🎚️ Every channel is its **own data source**, enabling fine-grained freshness tuning (e.g., busy incident channels ingested more frequently)
+
+### Threads, Distillation & Normalization
+
+Raw Slack text is keyword-searchable immediately via a **Postgres full-text (GIN) index**. For vector search, an LLM **distills** each thread into structured data:
+
+- A **one-line question** an engineer would actually search for
+- A short **summary**
+- The **resolution**
+- **Systems** and **code references** mentioned
+
+**Example: `#ckpt-support / thread_8f42`**
+
+```
+09:14  MAYA   Restore stalls after manifest load on the larger cluster. Small runs are fine.
+09:17  OWEN   I can reproduce with 128 shards. The logs stop before cache warmup.
+09:18  SAM    My laptop also stalls when it sees Monday.
+09:21  MAYA   Setting CKPT_PREFETCH=4 makes it complete. The default is too high for the NFS mount.
+```
+
+**Distilled artifact (one JSON per thread):**
+
+```json
+{
+  "question": "Why does restore stall after manifest load?",
+  "summary": "Large restores stop before cache warmup.",
+  "resolution": "Set CKPT_PREFETCH=4 for the NFS mount.",
+  "systems": ["checkpoint restore", "NFS"],
+  "code_refs": ["CKPT_PREFETCH"]
+}
+```
+
+**Resulting embedding row:**
+
+| Field | Value |
+|---|---|
+| `source` | `slack_thread` |
+| `source_id` | `thread_8f42` |
+| `embedding` | 3,072 dims |
+| `metadata` | channel + authors + time |
+
+> 📈 **Key finding:** The original transcript is *not* embedded directly. Accuracy increased **significantly** when threads were normalized into a consistent format. The extra metadata gives semantic matching more useful signal.
+
+### Bursting: Surfacing Hidden Gems
+
+Thread-level summaries sometimes miss important messages inside long threads. **Bursting** embeds runs of consecutive messages from the same author, with the **thread topic prepended as context** — sometimes the answer lives in one tangent message whose vocabulary never reaches the thread summary.
+
+**Quality gate** — a burst must clear a weighted threshold before embedding:
+
+- ✅ Contains a relatively rare token (corpus-wide **IDF ≥ 4.0**)
+- ✅ Combined length of **≥ 200 characters**
+- ✅ One or more messages have **reactions** (social boost)
+
+```
+AUTHOR A · short          →  BURST 01 · FILTERED   (short, common tokens, no reactions)
+AUTHOR A · follow-up      ┘
+AUTHOR B · technical      →  BURST 02 · EMBEDDED   (long, rare terms, reacted to)
+AUTHOR B · resolution     ┘
+AUTHOR C · ack            →  (filtered)
+```
+
+Qualifying bursts are stored in the embeddings table alongside thread-level records.
+
+---
+
+## 🐙 Code Repositories
+
+We initially debated embedding code at all — with Claude Code and CLI tools, *"grep is all you need"* felt plausible. After industry conversations and reading Cursor's findings on semantic search in large codebases, we tried it. We have many internal repos, **some larger than 40 GB**, so incremental freshness was the core concern.
+
+### CocoIndex: Incremental Code Embeddings
+
+We landed on **[CocoIndex](https://github.com/cocoindex-io/cocoindex)**, an open-source document embedding framework specializing in vectorizing codebases.
+
+**Chunking strategy** — language-specific regex boundaries, ordered coarse → fine:
+
+```
+File too large?  →  Try CLASS boundaries
+Still too large? →  Fall back to METHOD boundaries
+Still too large? →  Fall back to smaller BLOCKS
+```
+
+A single file may yield embeddings at **multiple specificity levels** (file-level, function-level).
+
+**Incremental sync:** CocoIndex tracks sync metadata in Postgres. On each commit, it re-embeds and re-exports **only changed chunks** — and since sync state and the embedding store live in the *same database*, this was a natural fit.
+
+**Self-service onboarding:** Repository onboarding moved into **config files** teams submit themselves, with path-level allowlists and denylists.
+
+---
+
+## 🔌 Custom Data Sources
+
+Some teams already had their own databases and didn't want to move data into Slack or docs just to participate. We treat custom sources as **plugin scripts**:
+
+1. A team opens a PR with a small **Python module** that reads from its system and emits rows shaped like the embeddings table
+2. Plus a matching **data source entry**
+
+As long as the script writes into the shared database using the standard schema, **the rest of the stack works unchanged** — queryable alongside Slack, code, and docs with zero special handling.
+
+---
+
+## 🧭 Planning & Tool Fan-Out
+
+Every query starts with a short **planning pass**: an LLM decides which tools and sources likely matter.
+
+### The Toolbelt
+
+| Tool | Purpose |
+|---|---|
+| `subsystem_index` | Per-file LLM summaries |
+| `search` | Unified vector pipeline across Slack, wiki, code & more (merged + reranked internally) |
+| `search_slack` | Direct Slack retrieval |
+| `search_code` | ripgrep over source repositories |
+| `recent_prs` | Recent pull requests relevant to the question |
+| `who_knows` | People with demonstrated expertise on a topic |
+
+The planner works over a compact description of the index — which projects exist, which sources each contains, and what each is good at — then emits tool selections the **executor fans out in parallel**, normalizes into a common evidence format, and passes to a final **synthesis LLM**.
+
+```
+        ┌──────────┐
+QUERY ─►│ PLANNER  │──┬─► SEARCH ────────┐
+        └──────────┘  ├─► SEARCH_SLACK ──┤
+                      ├─► SEARCH_CODE ───┼─► EVIDENCE (normalized rows) ─► SYNTHESIS ─► ANSWER + CITATIONS
+                      ├─► RECENT_PRS ────┤
+                      └─► WHO_KNOWS ─────┘
+```
+
+---
+
+## 🏆 Reranking
+
+A document can rank highly by sharing vocabulary with the query while answering a *different* question. Our two-stage fix:
+
+### Stage 1 — Reciprocal Rank Fusion (RRF)
+
+Combine the retrievers' incompatible result lists. For every document, add:
+
+$$
+\text{score} = \sum_{\text{lists}} \frac{\text{weight}}{60 + \text{rank}}
+$$
+
+- Default **weight = 1.0**, smoothing constant **k = 60**
+- The smoothing constant makes **consensus beat a single strong vote**: a document near the top across several retrievers outranks one that's first in only one list
+- Merge duplicate chunks → one source, cap per-file contributions → a **diverse top 20**
+
+### Stage 2 — LLM Reranker
+
+A small reranker model scores the original query against each candidate **0–10**; we keep the **top 10**.
+
+### Stage 3 — Context Expansion
+
+Once ranking is final, we **add context back**. Matched a wiki section? Pull in the **two neighboring sections** so headings, preconditions, and caveats that chunking split apart aren't lost — a complete snippet, not a lonely paragraph.
+
+> The output: results fused from multiple retrievers, deduplicated at source level, reranked against the actual question, and *then* expanded with surrounding context.
+
+---
+
+## 🖥️ Surfaces: MCP & Web UI
+
+### MCP — Primitives, Not Endpoints
+
+We expose retrieval building blocks as **direct tools** rather than hiding them behind one "answer this question" endpoint. Tools are intentionally simple and **as LLM-free as possible** so clients query quickly and cheaply.
+
+- Each MCP tool maps to one retrieval primitive: `search_slack`, `search_code`, `search`, `who_knows`
+- Inputs/outputs are **narrow, structured, and stable**
+- Most tools run one pipeline (vector, lexical, or ripgrep), apply lightweight scoring, and return **raw evidence rows**
+- **Claude Code (or any MCP-compatible agent) is the orchestrator** — it decides call order and assembles final answers. The retrieval layer doesn't depend on LLM decisions to serve requests.
+
+### Web UI — Full Pipeline
+
+The same tools, wired into an end-to-end pipeline owned by the UI agent:
+
+| Step | What Happens |
+|---|---|
+| **Planner** | Lightweight LLM pass picks tools for the query + active project |
+| **Executor** | Parallel fan-out → results normalized into a shared evidence schema (scores, recency, source hints) |
+| **Synthesis** | Final LLM produces the answer with citations, caveats, and cross-source synthesis |
+
+```
+MCP CLIENT                          WEB UI
+─────────────                       ─────────────
+Direct tool calls                   Planner ─► Executor ─► Synthesis
+Raw evidence rows                   "Ask a question, get an answer"
+Client orchestrates
+```
+
+---
+
+## 🗂️ Organization: Projects & Scoped Search
+
+As the corpus grew, "search everything everywhere" stopped being useful — compiler engineers didn't want infra runbooks, and vice versa.
+
+### Projects
+
+A **project** is a named bundle of data sources: specific Slack channels, repos, databases, and doc spaces relevant to a team or initiative.
+
+- 🪶 **Intentionally lightweight**
+- 🔁 The same source (e.g., a shared incidents channel) can be referenced by **multiple projects** — no duplication
+
+```
+COMPILER PROJECT                    PLATFORM PROJECT
+├─ Compiler Slack                   ├─ Shared Incidents ◄── shared!
+├─ Monolith Repo                    ├─ Platform Repo
+└─ Shared Incidents ◄── shared!     └─ Cloud Runbooks
+```
+
+### Onboarding & Defaults
+
+New users select or create a **default project** (ML training infra, Compiler, Data Center Ops…) stored on their profile. Queries are **automatically scoped** — new engineers get high-signal answers without first learning which channels, repos, or doc spaces matter.
+
+---
+
+## Final Thoughts
+
+> The knowledge base works because it **meets people where information already lives**, instead of forcing everything into one rigid system. By combining complementary search techniques, we surface evidence quickly — an experience flexible enough for real company data, yet structured enough to stay useful as Cerebras keeps growing.
+
+---
+
+## 📚 References
+
+1. Malkov & Yashunin — *Efficient and Robust ANN Search Using HNSW*, arXiv:1603.09320 / IEEE TPAMI 2018
+2. Anthropic — *Introducing Contextual Retrieval*, 2024
+3. Cormack, Clarke & Büttcher — *Reciprocal Rank Fusion Outperforms Condorcet and Individual Rank Learning Methods*, SIGIR 2009
+4. Li et al. — *Search-o1: Agentic Search-Enhanced Large Reasoning Models*, arXiv:2501.05366, 2025
+5. Anthropic — *Code Execution with MCP*, 2025
+6. Liu et al. — *Lost in the Middle: How Language Models Use Long Contexts*, arXiv:2307.03172, 2023
+7. Anthropic — *Use XML Tags*
+8. Salesforce/Slack Engineering — *How Slack AI Processes Billions of Messages*
+9. *Improving Agents — Best Nested Data Format*
+10. Cursor — *Improving Agent with Semantic Search*, 2025
+
+---
+
+*A few observations from a data-platform perspective, since this overlaps with your world:*
+
+- **Postgres as the single substrate** (embeddings via pgvector + HNSW, GIN full-text, *and* CocoIndex sync metadata in one database) is a pragmatic consolidation — the same instinct that leads teams to land Iceberg tables in Snowflake rather than spin up a separate vector store. The tradeoff to watch: HNSW index memory pressure as the corpus grows past tens of millions of rows.
+- **Distill-before-embed** is the standout pattern here. They're embedding an LLM-normalized artifact, not raw text — analogous to materializing a curated semantic layer rather than querying bronze tables directly. It costs LLM inference at ingest time but pays off in retrieval precision.
+- **Thread re-ingestion on every reply** is an upsert-heavy workload (their "one row per thread" design). Fine in Postgres at their scale, but it's the classic mutable-dimension problem — if you mirrored this architecture in Snowflake, you'd want merge-based micro-partition pruning or a streaming/aggregating table pattern rather than naive row updates.
+- **Projects as lightweight references rather than duplicated data** is essentially a view/share abstraction — the same reason Snowflake data sharing beats copying tables per team.
