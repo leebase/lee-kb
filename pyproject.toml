@@ -32,10 +32,15 @@ dev = [
 ]
 
 [project.scripts]
-lee-kb = "lee-kb.main:main"
+lee-kb = "lee_kb.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# Tests import lee_kb directly from the source checkout, without an install step.
+pythonpath = ["src"]
+testpaths = ["tests"]
 
 [tool.black]
 line-length = 88

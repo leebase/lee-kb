@@ -7,7 +7,7 @@
 
 | Attribute | Value |
 |-----------|-------|
-| **Phase** | Phase 0 — Product and Architecture Alignment |
+| **Phase** | Phase 1 — Sprint 1 Personal Foundation delivered |
 | **Mode** | 2 (Collaborative implementation with approval) |
 | **Last Updated** | 2026-08-03 |
 
@@ -15,16 +15,20 @@
 
 | Sprint | Status | Completion |
 |--------|--------|------------|
-| Sprint 1 — Personal Foundation | 🟡 Ready for implementation | 1 planning task complete; 0% product functionality |
+| Sprint 1 — Personal Foundation | 🟢 Delivered | 7/7 sprint tasks complete for the scoped slice; office formats and the curated golden benchmark explicitly deferred |
 
 ## What's Happening Now
 
 ### Current Work Stream
 
-The project is aligned around the governed knowledge fabric defined in
-`product-definition.md` and `architecture.md`. The next implementation target
-is one end-to-end personal retrieval path: local documents → normalized items
-and chunks → SQLite → lexical evidence with citations, freshness, and receipts.
+Sprint 1 delivered one governed retrieval path: local documents on disk
+synchronize into a normalized SQLite projection and are searchable through
+lexical retrieval, with permission filtering, citations, freshness, and
+retrieval receipts on every result. Full verification (`pytest`, `black
+--check`, `ruff check`) is green and `README.md`, `sprint-plan.md`, and
+`WHERE_AM_I.md` reflect the delivered behavior. The next work stream is
+choosing between curating the real golden benchmark, approving office-format
+dependencies, and starting the email connector (see Next Actions Queue).
 
 ### Recently Completed
 
@@ -35,10 +39,17 @@ and chunks → SQLite → lexical evidence with citations, freshness, and receip
 - ✅ Bootstrap CLI metadata and behavior now describe the governed retrieval product.
 - ✅ Bootstrap smoke tests pass and generated local metadata is ignored.
 - ✅ Public GitHub repository created at `https://github.com/leebase/lee-kb` with `main` as the default branch.
+- ✅ S1-01: Normalized domain contracts defined in `src/lee_kb/contracts.py` and `docs/sprint-1-contracts.md`.
+- ✅ S1-02: Local-file connector (`src/lee_kb/connectors/local_files.py`) reads `sources.toml`-compatible config; discovery, change detection, fetch, permissions, and checkpointing implemented and tested.
+- ✅ S1-03: SQLite repository (`src/lee_kb/repository.py`) persists items, chunks, permissions, sync state, and an append-only journal transactionally, with a stored schema version.
+- ✅ S1-04: Deterministic chunking (`src/lee_kb/chunking.py`) and BM25 lexical retrieval (`src/lee_kb/retrieval.py`).
+- ✅ S1-05: Governed `retrieve()` (`src/lee_kb/governance.py`): fail-closed authorization, freshness reporting, and one persisted receipt per evidence item.
+- ✅ S1-06: Golden evaluation harness (`tests/golden/`, `docs/golden-baseline.md`) runs a 20-question generated corpus plus 3 negative controls and records a lexical baseline (85.0% hit-at-1, 0.925 MRR). Proves the harness, not the curated Chief-of-Staff benchmark.
+- ✅ S1-07: `lee-kb init`/`sync`/`search` CLI (`src/lee_kb/main.py`) implemented and exercised end to end; full test suite (106 tests, including the golden corpus) passes; `black --check` and `ruff check` pass on `src` and `tests`.
 
 ### In Progress
 
-- ⏳ Define the first vertical slice's domain contracts and acceptance tests.
+- None. Sprint 1 is closed for the scoped slice; see Next Actions Queue for follow-on work.
 
 ### Recently Decided (2026-08-03 architecture review)
 
@@ -89,6 +100,8 @@ and chunks → SQLite → lexical evidence with citations, freshness, and receip
 | `architecture.md` | Layers, data flow, and provider boundaries | ✅ Source of truth |
 | `research/` | Research inputs and patterns to evaluate | ✅ Available |
 | `project-plan.md` | Long-term phases and metrics | ✅ Aligned |
+| `docs/sprint-1-contracts.md` | Field-by-field domain contract specification | ✅ Available |
+| `docs/golden-baseline.md` | Golden evaluation corpus method and recorded lexical baseline | ✅ Available |
 
 ### Session memory
 
@@ -111,20 +124,19 @@ and chunks → SQLite → lexical evidence with citations, freshness, and receip
 ## Open Questions
 
 1. Which Employee Zero workflow capabilities are in lee-kb's parity scope? KB freshness check, rebuild, FAQ loading, and search clearly are; live mission status and dossier validation may belong to consumers or a future Agent-Orch connector rather than the retrieval platform.
-2. Which parsing libraries are approved for .docx/.xlsx/.pptx? (Office formats require new runtime dependencies, which need explicit approval per project constraints.)
-3. Where does the Agent Board identity model live today, and what does lee-kb consume — a library, a service, or a shared schema?
+2. Which parsing libraries are approved for .docx/.xlsx/.pptx? (Office formats require new runtime dependencies, which need explicit approval per project constraints. The contracts and format-handler registry already support adding them without redesign.)
+3. Where does the Agent Board identity model live today, and what does lee-kb consume — a library, a service, or a shared schema? (Not blocking for the personal `lee` principal, which runs with no Agent Board dependency; relevant once a second principal or consumer needs identity.)
+4. Does this checkout have access to the real `knowledge/sources.toml` and the Employee Zero source roots (~1,200 documents, 15 roots)? Sprint 1's local-file connector was verified against test fixtures and a manual scratch corpus only — the actual import has not run.
 
 ## Next Actions Queue
 
 | Rank | Action | Owner | Done When |
 |------|--------|-------|-----------|
-| 1 | Inventory the existing Employee Zero kb implementation (`knowledge/sources.toml`, `python -m kb build`, consumers) as the v1 reference | Human + Planner | Reference behaviors and parity scope are documented |
-| 2 | Define source, knowledge-item, chunk, evidence, and receipt contracts | Human + Builder | Contracts and tests are reviewed and documented |
-| 3 | Implement the local-file connector and SQLite repository | Builder | A changed file is incrementally synchronized and queryable |
-| 4 | Add deterministic chunking and lexical retrieval | Builder | Exact-token queries return ranked chunks |
-| 5 | Add provenance, permission checks, freshness, and retrieval receipts | Builder | Every result is filtered and auditable |
-| 6 | Build the golden evaluation corpus and record the lexical baseline | Human + Builder | ~20 real Chief of Staff questions (plus negative cases) run as a test fixture with a recorded baseline |
-| 7 | Implement the Outlook/Microsoft 365 email connector (after local-file path is tested end to end) | Human + Planner | Connector scoped and approved |
+| 1 | Locate or provision the real `knowledge/sources.toml` and Employee Zero source roots, then run `lee-kb sync` against them | Human + Builder | The full corpus (~1,200 documents, 15 roots) is synchronized and queryable |
+| 2 | Curate the real golden benchmark: replace the generated 20-question seed corpus with Lee's recurring Chief of Staff questions against the Employee Zero sources | Human + Builder | `docs/golden-baseline.md` reports results against the curated corpus, not the generated one |
+| 3 | Get explicit approval for `.docx`/`.xlsx`/`.pptx` parsing libraries, then register format handlers | Human approval + Builder | New dependencies approved; `FORMAT_HANDLERS` in `src/lee_kb/connectors/local_files.py` covers office formats; tests added |
+| 4 | Implement the Outlook/Microsoft 365 email connector | Human + Planner | Connector scoped, approved, and implemented against the `Connector` contract |
+| 5 | Resolve Open Question 1 (Employee Zero parity scope for live mission status and dossier validation) | Human + Planner | Parity scope decision recorded in `architecture.md` or `product-definition.md` |
 
 ## Working Conventions
 

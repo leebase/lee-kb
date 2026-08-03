@@ -1,0 +1,230 @@
+# Seed corpus drawn from repo documents; Lee curates the final twenty from real Chief of Staff usage.
+version = 1
+description = "Offline seed corpus for the deterministic Sprint 1 lexical baseline."
+
+[[cases]]
+id = "operational-01"
+category = "operational_status"
+kind = "positive"
+question = "What is the current state of Agent-Orch?"
+expected_source = "product-definition.md"
+expected_evidence_token = "Application health"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "operational-02"
+category = "operational_status"
+kind = "positive"
+question = "What happened across all projects this week?"
+expected_source = "product-definition.md"
+expected_evidence_token = "Executive briefing"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "operational-03"
+category = "operational_status"
+kind = "positive"
+question = "what changed this week?"
+expected_source = "architecture.md"
+expected_evidence_token = "Synchronization Journal"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "operational-04"
+category = "operational_status"
+kind = "positive"
+question = "when was this connector last updated?"
+expected_source = "architecture.md"
+expected_evidence_token = "append-only journal"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "project-management-01"
+category = "project_management"
+kind = "positive"
+question = "Phase 1 Personal foundation?"
+expected_source = "project-plan.md"
+expected_evidence_token = "Active / Sprint 1"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "project-management-02"
+category = "project_management"
+kind = "positive"
+question = "Golden corpus measurable baseline?"
+expected_source = "project-plan.md"
+expected_evidence_token = "measurable baseline"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "project-management-03"
+category = "project_management"
+kind = "positive"
+question = "What capability is gained?"
+expected_source = "backlog/schema.md"
+expected_evidence_token = "opportunity"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "project-management-04"
+category = "project_management"
+kind = "positive"
+question = "Priority now next someday?"
+expected_source = "backlog/schema.md"
+expected_evidence_token = "priority: now"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "architecture-01"
+category = "architecture"
+kind = "positive"
+question = "Authorization occurs before evidence reaches an LLM?"
+expected_source = "architecture.md"
+expected_evidence_token = "Authorization Layer"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "architecture-02"
+category = "architecture"
+kind = "positive"
+question = "Retrieval never grants execution authority?"
+expected_source = "architecture.md"
+expected_evidence_token = "Permission evaluation is fail-closed"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "architecture-03"
+category = "architecture"
+kind = "positive"
+question = "Receipt remains independently verifiable after projection evolved?"
+expected_source = "architecture.md"
+expected_evidence_token = "historical evidence"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "architecture-04"
+category = "architecture"
+kind = "positive"
+question = "Search everything everywhere stops being useful?"
+expected_source = "architecture.md"
+expected_evidence_token = "Queries are scoped"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "job-search-01"
+category = "job_search"
+kind = "positive"
+question = "jobsearch widened after a search miss forced a manual file read?"
+expected_source = "research/employee-zero-kb-reference.md"
+expected_evidence_token = "widened 2026-07-20"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "job-search-02"
+category = "job_search"
+kind = "positive"
+question = "jobsearch largest root 402 4214?"
+expected_source = "research/employee-zero-kb-reference.md"
+expected_evidence_token = "402/4214"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "job-search-03"
+category = "job_search"
+kind = "positive"
+question = "jobsearch one of configured roots?"
+expected_source = "research/employee-zero-kb-reference.md"
+expected_evidence_token = "15 configured roots"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "job-search-04"
+category = "job_search"
+kind = "positive"
+question = "jobsearch globs never reached agent-in-a-box?"
+expected_source = "research/employee-zero-kb-reference.md"
+expected_evidence_token = "nested, gitignored repo"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "knowledge-discovery-01"
+category = "knowledge_discovery"
+kind = "positive"
+question = "What proposal did I send TVIQ?"
+expected_source = "product-definition.md"
+expected_evidence_token = "Personal knowledge"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "knowledge-discovery-02"
+category = "knowledge_discovery"
+kind = "positive"
+question = "What commitments have we made to Acme?"
+expected_source = "product-definition.md"
+expected_evidence_token = "Customer knowledge"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "knowledge-discovery-03"
+category = "knowledge_discovery"
+kind = "positive"
+question = "When did this bug first appear?"
+expected_source = "product-definition.md"
+expected_evidence_token = "Development history"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "knowledge-discovery-04"
+category = "knowledge_discovery"
+kind = "positive"
+question = "What evidence exists?"
+expected_source = "architecture.md"
+expected_evidence_token = "lee-kb answers"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "negative-no-evidence"
+category = "knowledge_discovery"
+kind = "no_evidence"
+question = "ultraviolet platypus deployment calendar?"
+principal = "lee"
+project = "default"
+
+[[cases]]
+id = "negative-out-of-scope"
+category = "project_management"
+kind = "out_of_scope"
+question = "Platform owned guidance lives?"
+evidence_source = "docs/project-onboarding.md"
+principal = "lee"
+project = "default"
+evidence_project = "scope-control"
+
+[[cases]]
+id = "negative-unauthorized"
+category = "knowledge_discovery"
+kind = "unauthorized"
+question = "What proposal did I send TVIQ?"
+evidence_source = "product-definition.md"
+principal = "mallory"
+project = "default"

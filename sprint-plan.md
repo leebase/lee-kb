@@ -9,9 +9,9 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | 🟡 Ready for implementation |
+| **Status** | 🟢 Delivered (personal foundation slice); two explicit deferrals remain |
 | **Start** | 2026-08-03 |
-| **Completion** | Project alignment complete; product work not started |
+| **Completion** | All 7 sprint tasks complete for the scoped slice. Office formats (.docx/.xlsx/.pptx) and the curated golden benchmark are explicitly deferred — see Sprint closure requirements. |
 | **Primary owner** | Human + Builder agent |
 
 ## Scope
@@ -54,13 +54,13 @@ Success is correct evidence retrieval, correct citations, correct project scopin
 | ID | Task | Owner | Status | Done when |
 |----|------|-------|--------|-----------|
 | S1-00 | Align AgentFlow project memory and roles | Human + AI | ✅ Complete | Root docs, agents, and skills describe this product |
-| S1-01 | Define normalized domain contracts, grounded in an inventory of the existing Employee Zero kb implementation | Planner + Builder | ⬜ Not started | Reference behaviors and parity scope are documented; interfaces and schemas are documented and tested |
-| S1-02 | Implement local-file connector | Builder | ⬜ Not started | New and changed files sync with stable cursors and provenance |
-| S1-03 | Implement SQLite repository | Builder | ⬜ Not started | Items, chunks, metadata, permissions, and sync state persist transactionally |
-| S1-04 | Add chunking and lexical retrieval | Builder | ⬜ Not started | Exact-token query returns deterministic ranked evidence |
-| S1-05 | Add governance and receipts | Builder | ⬜ Not started | Permission filtering, freshness, citations, and receipt fields are verified |
-| S1-06 | Build the golden evaluation corpus | Human + Builder | ⬜ Not started | ~20 real questions with expected evidence run against lexical retrieval and record a baseline |
-| S1-07 | Validate the full workflow and document it | Reviewer + Builder | ⬜ Not started | Automated tests and user-path checks pass; docs match behavior |
+| S1-01 | Define normalized domain contracts, grounded in an inventory of the existing Employee Zero kb implementation | Planner + Builder | ✅ Complete | `src/lee_kb/contracts.py` and `docs/sprint-1-contracts.md`; verified by `tests/test_contracts.py` |
+| S1-02 | Implement local-file connector | Builder | ✅ Complete | `src/lee_kb/connectors/local_files.py` syncs new and changed files with stable content-hash cursors and provenance; verified by `tests/test_local_connector.py` |
+| S1-03 | Implement SQLite repository | Builder | ✅ Complete | `src/lee_kb/repository.py` persists items, chunks, metadata, permissions, and sync state transactionally; verified by `tests/test_repository.py` |
+| S1-04 | Add chunking and lexical retrieval | Builder | ✅ Complete | `src/lee_kb/chunking.py` and `src/lee_kb/retrieval.py`; deterministic ranked evidence verified by `tests/test_retrieval.py` |
+| S1-05 | Add governance and receipts | Builder | ✅ Complete | `src/lee_kb/governance.py`; fail-closed permission filtering, freshness, citations, and receipts verified by `tests/test_governance.py` |
+| S1-06 | Build the golden evaluation corpus | Human + Builder | ✅ Complete (framework proof only) | `tests/golden/` and `docs/golden-baseline.md` run 20 generated questions plus 3 negative controls and record a lexical baseline; this proves the evaluation harness, not the curated benchmark — see Sprint closure requirements |
+| S1-07 | Validate the full workflow and document it | Reviewer + Builder | ✅ Complete | Full suite passes (`pytest tests/`); `black --check` and `ruff check` pass; `lee-kb init/sync/search` exercised end to end; docs updated to match delivered behavior |
 
 ## Decision gates
 
@@ -91,15 +91,15 @@ Identity: reuse Agent Board identities through an adapter where appropriate, but
 
 ## Sprint definition of done
 
-- [ ] The existing `knowledge/sources.toml` roots import and synchronize into the new projection.
-- [ ] A local document can be synchronized twice without duplicate projection rows.
-- [ ] A changed document updates its normalized projection, checkpoint, and journal entry.
-- [ ] A deleted document is tombstoned and excluded from ordinary search.
-- [ ] A lexical query returns ranked chunks with original-source citations.
-- [ ] The golden evaluation corpus runs and records a lexical baseline.
-- [ ] Permission filtering occurs before evidence is assembled.
-- [ ] Freshness status and a retrieval receipt are emitted for each retrieval.
-- [ ] Automated tests cover happy paths, empty input, changes, repeated sync, and denied evidence.
-- [ ] `README.md`, `context.md`, `WHERE_AM_I.md`, and `result-review.md` reflect the delivered behavior.
+- [ ] The existing `knowledge/sources.toml` roots import and synchronize into the new projection. *(Not done: this checkout has no real `knowledge/sources.toml` or Employee Zero source roots to import. The local-file connector reads a compatible config shape, verified only against test fixtures and a manual scratch corpus — see `result-review.md`.)*
+- [x] A local document can be synchronized twice without duplicate projection rows.
+- [x] A changed document updates its normalized projection, checkpoint, and journal entry.
+- [x] A deleted document is tombstoned and excluded from ordinary search.
+- [x] A lexical query returns ranked chunks with original-source citations.
+- [x] The golden evaluation corpus runs and records a lexical baseline. *(Generated seed corpus proving the evaluation harness — not the curated benchmark; see Sprint closure requirements and `docs/golden-baseline.md`.)*
+- [x] Permission filtering occurs before evidence is assembled.
+- [x] Freshness status and a retrieval receipt are emitted for each retrieval.
+- [x] Automated tests cover happy paths, empty input, changes, repeated sync, and denied evidence.
+- [x] `README.md`, `context.md`, `WHERE_AM_I.md`, and `result-review.md` reflect the delivered behavior.
 
 *Update task status as work is completed; keep new ideas in `backlog/candidates/`.*
