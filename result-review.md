@@ -3,6 +3,30 @@
 > **Running log of completed work.** Newest entries are at the top. Each entry
 > records what changed, why it matters, and how to verify it.
 
+## 2026-08-03 — Public repository initialized
+
+### What Was Built
+
+The project was committed under `6ccb8de`, published as the public GitHub
+repository `leebase/lee-kb`, and pushed to both `main` and
+`agent/initial-public-repo`. The repository includes the MIT license.
+
+### Why It Matters
+
+The project now has a public, reproducible starting point with a conventional
+default branch and an explicit open-source license.
+
+### How to Verify
+
+```bash
+gh repo view leebase/lee-kb --json nameWithOwner,isPrivate,defaultBranchRef,url
+git remote -v
+git status -sb
+```
+
+Expected: `isPrivate` is `false`, the default branch is `main`, and the working
+tree is clean.
+
 ## 2026-08-03 — AgentFlow project alignment
 
 ### What Was Built

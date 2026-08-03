@@ -34,6 +34,7 @@ and chunks → SQLite → lexical evidence with citations, freshness, and receip
 - ✅ Role instructions were added under `agents/` and domain workflows under `skills/`.
 - ✅ Bootstrap CLI metadata and behavior now describe the governed retrieval product.
 - ✅ Bootstrap smoke tests pass and generated local metadata is ignored.
+- ✅ Public GitHub repository created at `https://github.com/leebase/lee-kb` with `main` as the default branch.
 
 ### In Progress
 
@@ -120,5 +121,6 @@ and chunks → SQLite → lexical evidence with citations, freshness, and receip
 - **Project Name:** `lee-kb`
 - **Profile:** Python package / governed retrieval service
 - **Author:** Lee Harrington
+- **Public Repository:** `https://github.com/leebase/lee-kb`
 
 *This file is living project memory; keep it factual and current.*
