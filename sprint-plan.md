@@ -80,6 +80,15 @@ Success is correct evidence retrieval, correct citations, correct project scopin
 | Office formats pull in new runtime dependencies | Get explicit approval for .docx/.xlsx/.pptx parsing libraries before adding them |
 | Parity scope creeps to non-retrieval features | Live mission status and dossier validation stay with consumers unless explicitly pulled in |
 
+## Sprint closure requirements (locked 2026-08-03, binding on verification and review steps)
+
+The closing review must distinguish these two limitations clearly — they are different kinds of gap:
+
+1. **Office formats (.docx/.xlsx/.pptx) are required v1 product scope and deployed-reference parity requirements.** Their implementation is deferred from this run pending dependency approval only. The review must verify the contracts and format-handler registry support them without redesign — deferral of implementation, never deferral of the contract.
+2. **The generated twenty-question corpus proves the evaluation framework only.** It does not complete the curated golden benchmark until it includes Lee's real recurring Chief of Staff questions against the Employee Zero knowledge sources. The review and docs must not claim the golden benchmark is done.
+
+Identity: reuse Agent Board identities through an adapter where appropriate, but lee-kb must not be runtime-dependent on Agent Board for the personal `lee` principal.
+
 ## Sprint definition of done
 
 - [ ] The existing `knowledge/sources.toml` roots import and synchronize into the new projection.
