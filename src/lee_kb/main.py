@@ -76,6 +76,8 @@ class SyncSummary:
     updated: int = 0
     deleted: int = 0
     unchanged: int = 0
+    skipped: int = 0
+    skipped_objects: tuple[str, ...] = ()
 
 
 def resolve_config_path(explicit: str | None) -> Path:
@@ -177,7 +179,16 @@ def _sync_connector(
             summary.deleted += 1
             continue
 
-        document = connector.fetch(change.source_object_id)
+        try:
+            document = connector.fetch(change.source_object_id)
+            permissions = connector.permissions(change.source_object_id)
+        except ConnectorReadError as error:
+            # One unfetchable object degrades the pass instead of ending it
+            # (S1-R-10): count and report it, keep its cursor entry untouched
+            # so the next pass retries, and continue with the rest.
+            summary.skipped += 1
+            summary.skipped_objects += (f"{change.source_object_id}: {error}",)
+            continue
         item = KnowledgeItem(
             item_id=item_id,
             project=document.project,
@@ -186,7 +197,7 @@ def _sync_connector(
             content_hash=document.content_hash,
             source_timestamp=document.source_timestamp,
             sync_timestamp=sync_timestamp,
-            permissions=connector.permissions(change.source_object_id),
+            permissions=permissions,
             title=document.title,
             authority=document.authority,
             trust=document.trust,
@@ -209,7 +220,9 @@ def _sync_connector(
         discovered = tuple(
             obj for obj in discovered if _root_name(obj.source_object_id) == root_filter
         )
-    summary.unchanged = len(discovered) - summary.created - summary.updated
+    summary.unchanged = max(
+        0, len(discovered) - summary.created - summary.updated - summary.skipped
+    )
     return summary
 
 
@@ -259,11 +272,16 @@ def cmd_sync(args: argparse.Namespace) -> int:
         return 1
 
     scope = f" ({args.source})" if args.source else ""
-    print(
+    line = (
         f"Synced {connector_name}{scope}: {summary.created} created, "
         f"{summary.updated} updated, {summary.deleted} deleted, "
         f"{summary.unchanged} unchanged"
     )
+    if summary.skipped:
+        line += f", {summary.skipped} skipped"
+    print(line)
+    for note in summary.skipped_objects:
+        print(f"lee-kb: skipped {note}", file=sys.stderr)
     return 0
 
 

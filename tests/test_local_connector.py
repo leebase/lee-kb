@@ -252,3 +252,59 @@ def test_include_exclude_and_format_registry_enforce_default_deny(tmp_path) -> N
     discovered = {obj.source_object_id for obj in connector.discover()}
 
     assert discovered == {"notes:architecture.md", "notes:notes.txt"}
+
+
+def test_discover_skips_symlink_whose_target_escapes_the_root(tmp_path) -> None:
+    """Discovery and fetch agree on containment (S1-R-10).
+
+    A symlink inside a declared root whose resolved target escapes the root
+    is never handed out by discover(), so every discovered object is
+    fetchable under _resolve()'s containment rule.
+    """
+    connector = make_connector(tmp_path, {"inside.md": "inside the root"})
+    source_root = tmp_path / "source"
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside the declared root", encoding="utf-8")
+    (source_root / "escape.md").symlink_to(outside)
+    (source_root / "broken.md").symlink_to(tmp_path / "no-such-target.md")
+
+    discovered = {obj.source_object_id for obj in connector.discover()}
+
+    assert discovered == {"notes:inside.md"}
+    with pytest.raises(ConnectorReadError):
+        connector.fetch("notes:escape.md")
+
+
+def test_sync_pass_skips_unfetchable_object_and_continues(
+    tmp_path, repository, monkeypatch
+) -> None:
+    """One bad object degrades a sync pass instead of ending it (S1-R-10)."""
+    from datetime import datetime as _datetime
+
+    from lee_kb.main import _sync_connector
+
+    connector = make_connector(
+        tmp_path, {"good.md": "good document", "bad.md": "bad document"}
+    )
+    real_fetch = connector.fetch
+
+    def flaky_fetch(source_object_id):
+        if source_object_id.endswith("bad.md"):
+            raise ConnectorReadError("simulated unreadable object")
+        return real_fetch(source_object_id)
+
+    monkeypatch.setattr(connector, "fetch", flaky_fetch)
+
+    summary = _sync_connector(
+        connector,
+        repository,
+        root_filter=None,
+        sync_timestamp=_datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert summary.created == 1
+    assert summary.skipped == 1
+    assert len(summary.skipped_objects) == 1
+    assert "bad.md" in summary.skipped_objects[0]
+    hits = repository.search("good", project=DEFAULT_PROJECT, limit=5)
+    assert {hit.item.item_id.source_object_id for hit in hits} == {"notes:good.md"}

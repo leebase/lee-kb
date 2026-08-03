@@ -3,6 +3,33 @@
 > **Running log of completed work.** Newest entries are at the top. Each entry
 > records what changed, why it matters, and how to verify it.
 
+## 2026-08-03 — Review repairs: S1-R-01, S1-R-10, S1-R-11
+
+The independent review's verdict gate rejected the delivered slice; each
+finding was repaired and verified:
+
+- **S1-R-01 (High)** — the ungoverned public `retrieve()` paths were removed
+  from `src/lee_kb/retrieval.py`; `LexicalRetriever` is now a candidate
+  provider (`search()` only) and `governance.retrieve()` is the sole public
+  evidence surface. A package-wide sweep test
+  (`test_governed_retrieve_is_the_only_public_evidence_surface`) now fails if
+  any public callable other than the governed surface returns an
+  `EvidenceBundle`.
+- **S1-R-10 (High)** — discovery and fetch now share one containment rule: a
+  symlink whose resolved target escapes its declared root is skipped at
+  `discover()` time, and `_sync_connector` skips (and reports) unfetchable
+  objects instead of aborting the pass. `SyncSummary` gained
+  `skipped`/`skipped_objects` and the CLI prints them.
+- **S1-R-11 (High)** — lexical matching ORs content tokens (stopwords
+  stripped) and ranks by BM25; strict AND remains as `match="all"`. The
+  golden corpus questions were rewritten as paraphrases and the baseline
+  honestly re-recorded: 60.0% hit-at-1 / 100% hit-at-10 / 0.766 MRR
+  (previously 85.0%/0.925 over extract-style questions, which flattered the
+  matcher).
+
+Verify: `python3 -m pytest` (109 passed), `BLACK_NUM_WORKERS=1 python3 -m
+black --check src tests`, `python3 -m ruff check src tests`.
+
 ## 2026-08-03 — Sprint 1 (Personal Foundation) delivered: full verification green, docs updated
 
 ### What Was Built
@@ -32,7 +59,7 @@ documentation in line with delivered behavior:
 - `tests/golden/` and `docs/golden-baseline.md` — the golden evaluation
   harness (S1-06): 20 generated questions plus 3 negative controls run
   through `governance.retrieve()` against a temporary SQLite projection,
-  recording an 85.0% hit-at-1 / 100% hit-at-10 / 0.925 MRR lexical baseline.
+  recording a 60.0% hit-at-1 / 100% hit-at-10 / 0.766 MRR lexical baseline over paraphrase questions (re-recorded after S1-R-11 replaced the AND matcher and extract-style seed questions).
   **This is the generated seed corpus proving the evaluation harness, not
   Lee's curated golden benchmark** — it draws questions from this
   repository's own documents, not real recurring Chief of Staff questions
@@ -82,7 +109,7 @@ This step additionally ran, as noted:
   report clean: `All done!` / `All checks passed!`.
 - `python3 -m pytest tests/` — rerun once, as an exception to verify the
   black/ruff edits introduced no regression (not a re-validation of the
-  preserved acceptance-criterion evidence above): **106 passed** in 5.24s,
+  preserved acceptance-criterion evidence above): **109 passed** (re-run after the S1-R-01/10/11 repairs),
   exactly the 82 + 24 already-preserved counts combined.
 - `env PYTHONPATH=src python3 -m lee_kb.main --help` — rerun once for the same
   reason: unchanged, exit 0.

@@ -12,7 +12,12 @@ recurring Chief of Staff questions against the Employee Zero source corpus.
 declared Markdown sources into a temporary SQLite projection, chunks them with
 the production deterministic chunker, and sends every question through
 `governance.retrieve()`. No network, model, embedding, or mutable shared index
-is involved.
+is involved. Lexical matching ORs the query's content tokens (stopwords
+stripped) and ranks by BM25, so paraphrase questions score by vocabulary
+overlap rather than requiring every token to co-occur; the strict AND mode
+remains available as `match="all"`. Positive questions are natural-language
+paraphrases that reuse document word-forms (FTS5 does not stem), not pasted
+extracts.
 
 A positive question is a **hit** when its declared source and evidence token
 occur in the governed top-10 evidence. Rank is the first matching citation's
@@ -27,15 +32,15 @@ source evidence exists outside the permitted path.
 | operational-01 | Operational status | `product-definition.md` | Hit | 1 |
 | operational-02 | Operational status | `product-definition.md` | Hit | 1 |
 | operational-03 | Operational status | `architecture.md` | Hit | 1 |
-| operational-04 | Operational status | `architecture.md` | Hit | 1 |
-| project-management-01 | Project management | `project-plan.md` | Hit | 1 |
-| project-management-02 | Project management | `project-plan.md` | Hit | 2 |
-| project-management-03 | Project management | `backlog/schema.md` | Hit | 1 |
-| project-management-04 | Project management | `backlog/schema.md` | Hit | 2 |
-| architecture-01 | Architecture | `architecture.md` | Hit | 1 |
-| architecture-02 | Architecture | `architecture.md` | Hit | 2 |
+| operational-04 | Operational status | `architecture.md` | Hit | Hit | 2 |
+| project-management-01 | Project management | `project-plan.md` | Hit | Hit | 9 |
+| project-management-02 | Project management | `project-plan.md` | Hit | Hit | 2 |
+| project-management-03 | Project management | `backlog/schema.md` | Hit | Hit | 2 |
+| project-management-04 | Project management | `backlog/schema.md` | Hit | Hit | 5 |
+| architecture-01 | Architecture | `architecture.md` | Hit | Hit | 2 |
+| architecture-02 | Architecture | `architecture.md` | Hit | Hit | 2 |
 | architecture-03 | Architecture | `architecture.md` | Hit | 1 |
-| architecture-04 | Architecture | `architecture.md` | Hit | 1 |
+| architecture-04 | Architecture | `architecture.md` | Hit | Hit | 2 |
 | job-search-01 | Job search | `research/employee-zero-kb-reference.md` | Hit | 1 |
 | job-search-02 | Job search | `research/employee-zero-kb-reference.md` | Hit | 1 |
 | job-search-03 | Job search | `research/employee-zero-kb-reference.md` | Hit | 1 |
@@ -51,16 +56,18 @@ source evidence exists outside the permitted path.
 ## Baseline
 
 - Expected-citation hit rate at 10: **20/20 (100.0%)**.
-- Expected-citation hit rate at 1: **17/20 (85.0%)**.
-- Mean reciprocal rank: **0.925**.
+- Expected-citation hit rate at 1: **12/20 (60.0%)**.
+- Mean reciprocal rank: **0.766**.
 - Negative controls: **3/3 correct**.
 - Unauthorized candidates released: **0**; denied candidates observed: **1**.
 
 Semantic or hybrid retrieval must beat the lexical rank-quality baseline
-(85.0% hit-at-1 and 0.925 MRR) on Lee's curated corpus without reducing
+(60.0% hit-at-1 and 0.766 MRR) on Lee's curated corpus without reducing
 top-10 recall or weakening project and authorization controls. The seed set's
 100% hit-at-10 is saturated and is therefore not, by itself, evidence of a
-semantic improvement.
+semantic improvement. An earlier revision of this corpus used extract-style
+questions and reported 85.0% hit-at-1 / 0.925 MRR; that figure flattered the
+matcher (S1-R-11) and was re-recorded against paraphrase questions.
 
 ## Boundaries and audit semantics
 

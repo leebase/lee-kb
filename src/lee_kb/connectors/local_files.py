@@ -288,6 +288,7 @@ class LocalFilesConnector(Connector):
         for root in self._roots_by_name.values():
             if not root.path.is_dir():
                 continue
+            root_base = root.path.resolve()
             for file_path in sorted(root.path.rglob("*")):
                 if not file_path.is_file():
                     continue
@@ -297,7 +298,19 @@ class LocalFilesConnector(Connector):
                 handler = FORMAT_HANDLERS.get(file_path.suffix.lower())
                 if handler is None:
                     continue
-                objects.append(self._describe(root, relative, file_path, handler))
+                resolved = file_path.resolve()
+                if root_base not in resolved.parents and resolved != root_base:
+                    # Same containment rule as _resolve(): a candidate whose
+                    # resolved target escapes its declared root (e.g. a
+                    # symlink out of the tree) is never handed out, so
+                    # discovery and fetch agree on which objects exist.
+                    continue
+                try:
+                    objects.append(self._describe(root, relative, file_path, handler))
+                except ConnectorReadError:
+                    # One unreadable candidate degrades discovery to a skip;
+                    # it must not abort the whole pass.
+                    continue
         return tuple(objects)
 
     def _describe(

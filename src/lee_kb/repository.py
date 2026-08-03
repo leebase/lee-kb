@@ -86,8 +86,13 @@ class Repository(ABC):
         project: str,
         limit: int = 10,
         include_tombstoned: bool = False,
+        match: str = "any",
     ) -> tuple[SearchHit, ...]:
-        """Return lexical matches from the current projection."""
+        """Return lexical matches from the current projection.
+
+        ``match="any"`` ORs content tokens (paraphrase-friendly, BM25-ranked);
+        ``match="all"`` requires every token (strict exact-token mode).
+        """
 
     @abstractmethod
     def record_receipt(self, receipt: RetrievalReceipt) -> int:
@@ -611,12 +616,13 @@ class SQLiteRepository(Repository):
         project: str,
         limit: int = 10,
         include_tombstoned: bool = False,
+        match: str = "any",
     ) -> tuple[SearchHit, ...]:
         if not isinstance(project, str) or not project.strip():
             raise ValueError("project must be a non-empty string")
         if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
             raise ValueError("limit must be a positive integer")
-        fts_query = _fts_query(query)
+        fts_query = _fts_query(query, match=match)
         if fts_query is None:
             return ()
         rows = self._connection.execute(
@@ -803,13 +809,76 @@ def _receipt_from_row(row: sqlite3.Row) -> RetrievalReceipt:
     )
 
 
-def _fts_query(query: str) -> str | None:
+_FTS_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "did",
+        "do",
+        "does",
+        "for",
+        "from",
+        "had",
+        "has",
+        "have",
+        "how",
+        "i",
+        "in",
+        "is",
+        "it",
+        "its",
+        "of",
+        "on",
+        "or",
+        "our",
+        "s",
+        "should",
+        "that",
+        "the",
+        "this",
+        "to",
+        "was",
+        "we",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "will",
+        "with",
+    }
+)
+
+
+def _fts_query(query: str, *, match: str = "any") -> str | None:
+    """Build an FTS5 MATCH expression from a natural-language query.
+
+    ``match="any"`` ORs the content tokens so paraphrase questions rank by
+    BM25 overlap instead of requiring every token to co-occur (S1-R-11).
+    ``match="all"`` is the strict AND mode for exact-token lookups. A small
+    stopword set is stripped first; a query of only stopwords falls back to
+    its raw tokens rather than matching nothing.
+    """
     if not isinstance(query, str):
         raise TypeError("query must be a string")
+    if match not in ("any", "all"):
+        raise ValueError("match must be 'any' or 'all'")
     tokens = re.findall(r"\w+", query, flags=re.UNICODE)
     if not tokens:
         return None
-    return " AND ".join('"' + token.replace('"', '""') + '"' for token in tokens)
+    content = [token for token in tokens if token.lower() not in _FTS_STOPWORDS]
+    if not content:
+        content = tokens
+    joiner = " AND " if match == "all" else " OR "
+    return joiner.join('"' + token.replace('"', '""') + '"' for token in content)
 
 
 def _dump_tuple(values: tuple[str, ...]) -> str:
