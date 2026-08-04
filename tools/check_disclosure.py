@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 #: Absolute host paths in any form a real machine produces.
