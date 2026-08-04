@@ -1,0 +1,495 @@
+{
+  "playbook_id": "sprint_03_governed_answer",
+  "name": "Sprint 3 - The governed answer() surface",
+  "authoring_notes": [
+    "Objective: turn retrieval into governed answers. Not a chatbot; a trustworthy knowledge service. Every substantive statement must be attributable, absence must be authoritative, conflicts must be surfaced rather than resolved.",
+    "DEPENDENCY GUARDRAIL (binding): lee-kb has ZERO runtime dependencies and AGENTS.md requires explicit human approval to add one. No LLM client may be added in this sprint. The answer pipeline is therefore built deterministically behind a SynthesisProvider seam: evidence selection, provenance, absence classification, conflict detection, and confidence classification are all mechanical over the EvidenceBundle and need no model. Only narrative prose generation needs an LLM, and that provider is specified but NOT implemented, pending Lee's dependency approval.",
+    "Benchmark case 3 ('filesystem + repository reasoning') is interpreted as corpus-derived reasoning about whether an artifact was ever created -- the deployed decision text itself says a naming decision 'does not approve repository creation'. Answering 'nowhere' from that is synthesis over evidence, not filesystem access. Live filesystem verification is explicitly OUT of scope and must be recorded as a deferred extension, not silently skipped.",
+    "Every fixture must be deterministic and offline. The Documentation Steward benchmark is reproduced as synthetic fixture documents with the same SHAPE (a naming decision in one root, a blocking gate in a second, a status note in a third, and an artifact that was named but never created) so it is a permanent regression test that does not depend on Lee's private corpus.",
+    "Mixed crew, cost optimized: claude_code opus for the contracts/architecture step and the verdict-gated review; codex_cli gpt-5.6-sol high for the three implementation steps; claude_code sonnet for assembly, CLI, and documentation.",
+    "Reviewers must preflight the verdict with tools/validate_verdict.py before finishing.",
+    "Do not mix unrelated cleanup into this sprint. Office formats, semantic retrieval, memory optimization, and the repository split are all out of scope."
+  ],
+  "defaults": {
+    "worker": "claude_code",
+    "routing": {
+      "primary": {
+        "harness": "claude_code",
+        "model": "sonnet"
+      },
+      "fallback": {
+        "harness": "codex_cli",
+        "model": "gpt-5.6-sol"
+      }
+    },
+    "retry_policy": {
+      "max_attempts": 2,
+      "strategy": "rerun_with_validation_feedback"
+    }
+  },
+  "run_policy": {
+    "on_step_failure": "halt",
+    "require_validation_pass_to_advance": true
+  },
+  "steps": [
+    {
+      "step_id": "step_01_answer_architecture_and_contracts",
+      "name": "Answer architecture, evidence/confidence/conflict models, contracts (opus)",
+      "routing": {
+        "primary": {
+          "harness": "claude_code",
+          "model": "opus"
+        }
+      },
+      "mission": "Before writing, read AGENTS.md, skills/retrieval-development.md, context.md (Decisions Locked is binding), architecture.md (Retrieval Surfaces section defines retrieve() and answer()), docs/sprint-1-contracts.md, src/lee_kb/contracts.py, and src/lee_kb/governance.py. Design the governed answer surface and write its contracts. Deliver: (1) docs/answer-architecture.md with the exact headings Answer Pipeline, Evidence Model, Confidence Model, Conflict Handling, Provenance Guarantees, Absence Semantics, Synthesis Providers, and Deferred Extensions -- each with at least 120 non-whitespace characters. (2) src/lee_kb/answer_contracts.py, stdlib only, frozen dataclasses: an Answer carrying ordered Claims, an overall confidence, the question, the principal, the project, the retrieval receipt identifiers, and both evidence_used and evidence_omitted; a Claim carrying its text, its supporting citations, and its own confidence; a Confidence enum with exactly the four locked values DIRECTLY_EVIDENCED, SYNTHESIZED, INFERRED, and UNKNOWN; an Absence type distinguishing NOT_FOUND (no evidence exists), INACCESSIBLE (evidence exists but the principal may not see it), and UNKNOWN (the question could not be resolved) -- these three must never collapse into one state; a Conflict carrying the competing claims, their sources, and which side is newer or more authoritative WITHOUT selecting a winner; and a SynthesisProvider protocol with a single narrate() method taking assembled claims and returning prose, so an LLM provider can be added later without touching the pipeline. (3) tests/test_answer_contracts.py covering construction, immutability, that the three absence kinds are distinct, and that a Claim cannot be constructed without at least one citation unless its confidence is UNKNOWN. Add NO new runtime dependencies. Keep all writes within docs/, src/, and tests/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/retrieval-development.md",
+        "context.md",
+        "architecture.md",
+        "docs/sprint-1-contracts.md",
+        "src/lee_kb/contracts.py",
+        "src/lee_kb/governance.py"
+      ],
+      "allowed_paths": [
+        "docs/",
+        "src/",
+        "tests/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "docs/answer-architecture.md",
+            "type": "markdown"
+          },
+          {
+            "path": "src/lee_kb/answer_contracts.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/answer_contracts.py"
+          },
+          {
+            "type": "markdown_headings_present",
+            "path": "docs/answer-architecture.md",
+            "headings": [
+              "Answer Pipeline",
+              "Evidence Model",
+              "Confidence Model",
+              "Conflict Handling",
+              "Provenance Guarantees",
+              "Absence Semantics",
+              "Synthesis Providers",
+              "Deferred Extensions"
+            ],
+            "min_chars_per_heading": 120
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/",
+            "require_collected_tests": true
+          },
+          {
+            "type": "command_succeeds",
+            "command": "env PYTHONPATH=src python3 -c \"from lee_kb import answer_contracts\""
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the answer contracts so all eight required headings carry substantive content, the four confidence values and three absence kinds are distinct and enforced, Conflict never selects a winner, the SynthesisProvider protocol exists, no runtime dependency was added, and the full suite passes. Keep writes inside docs/, src/, and tests/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_02_evidence_selection_and_provenance",
+      "name": "Evidence selection and complete provenance (codex)",
+      "routing": {
+        "primary": {
+          "harness": "codex_cli",
+          "model": "gpt-5.6-sol",
+          "effort": "high"
+        }
+      },
+      "mission": "Before writing, read AGENTS.md, docs/answer-architecture.md, src/lee_kb/answer_contracts.py, src/lee_kb/governance.py, and src/lee_kb/retrieval.py. Implement src/lee_kb/answer_evidence.py, stdlib only: evidence selection that retrieves only what is needed to answer, rather than maximizing chunk count. Required behavior: selection runs over the governed retrieve() surface and NEVER over any other path -- permission filtering must already have happened before selection sees a candidate; selection records BOTH the evidence it used and the evidence it deliberately omitted, each with the reason it was omitted (below relevance threshold, redundant with a higher-ranked chunk from the same source, or outside the requested project); selection is deterministic for a given bundle so the same question yields the same evidence set every run; and per-source deduplication prevents one document dominating the evidence set through many chunks. Provenance is complete: every selected evidence item retains its knowledge item ID, chunk ID, content hash, source locator, authority, trust, and both source and sync timestamps, so a downstream claim can be attributed without re-querying. Write tests/test_answer_evidence.py covering: fewer chunks are selected than retrieval returned when later chunks add nothing; omitted evidence is recorded with a reason and never silently dropped; selection is deterministic across repeated runs; one source cannot occupy the whole evidence set; and provenance fields survive selection intact. Keep all writes within src/lee_kb/ and tests/.",
+      "inputs": [
+        "AGENTS.md",
+        "docs/answer-architecture.md",
+        "src/lee_kb/answer_contracts.py",
+        "src/lee_kb/governance.py",
+        "src/lee_kb/retrieval.py"
+      ],
+      "allowed_paths": [
+        "src/lee_kb/",
+        "tests/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "src/lee_kb/answer_evidence.py",
+            "type": "text"
+          },
+          {
+            "path": "tests/test_answer_evidence.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/answer_evidence.py"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/",
+            "require_collected_tests": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair evidence selection so it runs only over the governed surface, records omitted evidence with reasons, is deterministic, caps per-source dominance, preserves full provenance, and passes the targeted tests. Keep writes inside src/lee_kb/ and tests/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_03_absence_and_conflict",
+      "name": "Authoritative absence and conflict identification (codex)",
+      "routing": {
+        "primary": {
+          "harness": "codex_cli",
+          "model": "gpt-5.6-sol",
+          "effort": "high"
+        }
+      },
+      "mission": "Before writing, read AGENTS.md, docs/answer-architecture.md (Absence Semantics and Conflict Handling are the specification), src/lee_kb/answer_contracts.py, src/lee_kb/answer_evidence.py, and src/lee_kb/governance.py. Implement src/lee_kb/answer_absence.py and src/lee_kb/answer_conflict.py, stdlib only.\n\nABSENCE. Support authoritative 'nowhere' answers. The three states must be produced from distinguishable inputs and must NEVER collapse: NOT_FOUND means the governed retrieval ran, the corpus was searched, and nothing matched -- an authoritative absence; INACCESSIBLE means candidates existed but permission filtering removed them (denied_count greater than zero with no released evidence) -- the system must say the principal may not see it rather than claiming nothing exists; UNKNOWN means the question could not be resolved -- for example the requested project holds no synchronized content at all, or the corpus is stale beyond the requested freshness. An authoritative NOT_FOUND must also be able to carry supporting evidence: when the corpus positively states that something was never created (a decision that approves a name but explicitly does not authorize creation), the absence is EVIDENCED and cites that statement, which is a stronger answer than mere silence. Never report INACCESSIBLE as NOT_FOUND -- that would leak the shape of hidden content into a false claim of nonexistence, and it must be covered by a test.\n\nCONFLICT. Identify conflicting evidence rather than silently choosing. Detect when two selected evidence items make competing statements about the same subject -- at minimum, differing declared authority on the same topic, or a newer source that supersedes an older one. Report BOTH sides with their citations. Where possible, state which is newer (by source timestamp) or more authoritative (by declared authority, canonical outranking derived), but record that as an ordering signal only -- the Conflict type must not contain a resolved winner, and no code path may drop the losing side. Write tests/test_answer_absence.py and tests/test_answer_conflict.py covering every state and both conflict signals, including the leak test above and a test that a detected conflict retains both sides through assembly. Keep all writes within src/lee_kb/ and tests/.",
+      "inputs": [
+        "AGENTS.md",
+        "docs/answer-architecture.md",
+        "src/lee_kb/answer_contracts.py",
+        "src/lee_kb/answer_evidence.py",
+        "src/lee_kb/governance.py"
+      ],
+      "allowed_paths": [
+        "src/lee_kb/",
+        "tests/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "src/lee_kb/answer_absence.py",
+            "type": "text"
+          },
+          {
+            "path": "src/lee_kb/answer_conflict.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/answer_absence.py"
+          },
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/answer_conflict.py"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/",
+            "require_collected_tests": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair absence and conflict handling so NOT_FOUND, INACCESSIBLE, and UNKNOWN are produced from distinguishable inputs and never collapse, evidenced absence cites its supporting statement, an inaccessible result is never reported as nonexistent, conflicts report both sides without a resolved winner, and the targeted tests pass. Keep writes inside src/lee_kb/ and tests/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_04_answer_assembly_and_cli",
+      "name": "answer() assembly, deterministic synthesis provider, and CLI (sonnet)",
+      "mission": "Before writing, read AGENTS.md, skills/development-loop.md, docs/answer-architecture.md, src/lee_kb/answer_contracts.py, src/lee_kb/answer_evidence.py, src/lee_kb/answer_absence.py, src/lee_kb/answer_conflict.py, src/lee_kb/governance.py, and src/lee_kb/main.py. Implement src/lee_kb/answer.py: the public answer() surface, layered strictly on top of the governed retrieve() -- it must call governance.retrieve() and must never reach retrieval or the repository directly, so authorization, receipts, and project scoping are inherited rather than reimplemented. Compose: governed retrieval, evidence selection, absence classification, conflict identification, claim assembly with per-claim citations and per-claim confidence, and overall confidence derived from the claims (an answer is only DIRECTLY_EVIDENCED when every substantive claim is). Do NOT concatenate retrieved chunks -- assemble distinct claims, each attributable, and merge evidence from multiple sources into one coherent result. Implement the default SynthesisProvider as a deterministic, offline, LLM-free composer that renders the assembled claims, their attributions, conflicts, and absence state into readable text. Add NO runtime dependency; the LLM-backed provider is specified in docs/answer-architecture.md and deliberately NOT implemented pending explicit dependency approval -- leave the seam and say so in the module docstring. Add a CLI surface: 'lee-kb ask <question>' with --project, --principal, --config, and --database, printing the answer, its per-claim citations, its confidence, any conflicts, and the retrieval receipt reference. Extend tests/test_cli.py for the ask command end to end, and write tests/test_answer.py covering: answer() refuses without a principal (fail-closed inherited from retrieve()); a receipt is written for every answer including empty ones; multi-source synthesis produces claims attributed to more than one source; and every substantive claim carries at least one citation. Keep all writes within src/lee_kb/ and tests/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/development-loop.md",
+        "docs/answer-architecture.md",
+        "src/lee_kb/answer_contracts.py",
+        "src/lee_kb/answer_evidence.py",
+        "src/lee_kb/answer_absence.py",
+        "src/lee_kb/answer_conflict.py",
+        "src/lee_kb/governance.py",
+        "src/lee_kb/main.py"
+      ],
+      "allowed_paths": [
+        "src/lee_kb/",
+        "tests/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "src/lee_kb/answer.py",
+            "type": "text"
+          },
+          {
+            "path": "tests/test_answer.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/answer.py"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/",
+            "require_collected_tests": true
+          },
+          {
+            "type": "command_succeeds",
+            "command": "env PYTHONPATH=src python3 -m lee_kb.main ask --help"
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair answer() so it composes strictly over governance.retrieve(), assembles attributable claims rather than concatenating chunks, derives overall confidence from claim confidence, writes a receipt for every answer, exposes 'lee-kb ask', adds no runtime dependency, and passes the full suite. Keep writes inside src/lee_kb/ and tests/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_05_regression_fixtures",
+      "name": "Permanent regression fixtures for the seven benchmark families (codex)",
+      "routing": {
+        "primary": {
+          "harness": "codex_cli",
+          "model": "gpt-5.6-sol",
+          "effort": "high"
+        }
+      },
+      "mission": "Before writing, read AGENTS.md, docs/answer-architecture.md, src/lee_kb/answer.py, and tests/golden/test_golden_corpus.py (for the established deterministic-offline harness pattern). Build permanent regression fixtures under tests/answers/ covering all SEVEN required families, each deterministic and offline, each synchronized through the local-file connector into a temporary SQLite projection and answered through the public answer() surface:\n(1) DOCUMENTATION STEWARD SHAPE -- synthetic fixture documents reproducing the real investigation's structure: a naming decision in one root that assigns an official name and identifiers, a blocking gate in a second root whose conditions include work described in the first, and a status note in a third root; the correct answer requires combining all three. Do not copy any real corpus content.\n(2) FUZZY NAME -- the question uses an approximate or partial name ('documentation steward') while the corpus uses the full official name; the answer must still find it.\n(3) CROSS-REPOSITORY SYNTHESIS -- the answer requires claims attributed to at least three distinct roots, and the test asserts multiple distinct source attributions.\n(4) AUTHORITATIVE ABSENCE -- an artifact is named in the corpus but the corpus explicitly states it was never created; the answer must say so, cite the statement, and classify the absence as evidenced NOT_FOUND rather than silence.\n(5) CONFLICTING EVIDENCE -- two roots make competing statements; the answer must report both sides with citations and must not select a winner. Assert that both citations appear.\n(6) DUPLICATE-SOURCE PROTECTION -- the same content appears in several chunks of one document; assert one source cannot dominate the evidence set and the answer does not repeat the same claim.\n(7) PROVENANCE COMPLETENESS -- assert that every substantive claim in every positive fixture carries at least one citation resolving to a real knowledge item, and that evidence_omitted is populated with reasons wherever selection dropped candidates.\nThese are permanent regression fixtures: they must not depend on Lee's private corpus, network, wall-clock time, or filesystem state outside the temporary directory.\n\nIf a fixture surfaces a genuine defect in the answer implementation, you MAY repair src/lee_kb/ to fix it -- the fixtures are this sprint's acceptance criteria, so a real failure must be fixed rather than worked around. Never weaken a fixture to make it pass: if the implementation is wrong, fix the implementation and say so; if the fixture's expectation was wrong, correct the expectation and explain why in a comment. Keep all writes within tests/ and src/lee_kb/.",
+      "inputs": [
+        "AGENTS.md",
+        "docs/answer-architecture.md",
+        "src/lee_kb/answer.py",
+        "src/lee_kb/answer_contracts.py",
+        "tests/golden/test_golden_corpus.py"
+      ],
+      "allowed_paths": [
+        "tests/",
+        "src/lee_kb/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "tests/answers/test_answer_benchmarks.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "tests/answers/test_answer_benchmarks.py"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/answers/",
+            "require_collected_tests": true
+          },
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/",
+            "require_collected_tests": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the fixtures so all seven families are present and genuinely exercised, each is deterministic and offline, the Documentation Steward shape requires combining three roots, the absence case cites its supporting statement, the conflict case asserts both sides survive, and the suites pass. If a fixture exposes a real implementation defect, repair src/lee_kb/ rather than weakening the fixture. Keep writes inside tests/ and src/lee_kb/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_06_verification_benchmark_and_docs",
+      "name": "Full verification, benchmark results, and project memory (sonnet)",
+      "mission": "Before writing, read AGENTS.md, skills/documentation.md, skills/test-as-lee.md, context.md, sprint-plan.md, WHERE_AM_I.md, result-review.md, and docs/answer-architecture.md. First drive full verification green: python3 -m pytest, BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools, python3 -m ruff check src tests tools, python3 -m compileall -q src tests tools, and git diff --check. Repair whatever they surface.\n\nThen produce docs/answer-benchmark-results.md with the exact headings Benchmark Cases, Results, Provenance Examples, Confidence Distribution, Conflict Examples, Performance Observations, and Recommendation. Report per-family pass or fail for all seven fixture families with the actual assertions exercised; include at least two concrete provenance examples (a claim with its citations) and at least one concrete conflict example, drawn from the FIXTURES, never from Lee's private corpus. Record answer latency observed in the fixture suite. The Recommendation must be exactly one of 'Ready for customer-facing Q&A', 'Ready after specific follow-up', or 'Not ready', with the reasoning and, if follow-up, the specific items.\n\nPUBLICATION CONSTRAINT: this repository is public. No absolute host paths, no private corpus content, nothing personal or credential-shaped. Then update project memory: add a result-review.md top entry for the answer() slice; update context.md (Recently Completed, Next Actions Queue, open questions); update sprint-plan.md to cover Sprint 3 while keeping the Sprint 1 and 2 records intact; update WHERE_AM_I.md; and update README.md to document 'lee-kb ask'. State plainly that the LLM-backed synthesis provider is specified but unimplemented pending dependency approval, and that live filesystem verification remains a deferred extension. Keep all writes within src/, tests/, tools/, docs/, README.md, context.md, sprint-plan.md, WHERE_AM_I.md, and result-review.md.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/documentation.md",
+        "skills/test-as-lee.md",
+        "context.md",
+        "sprint-plan.md",
+        "WHERE_AM_I.md",
+        "result-review.md",
+        "docs/answer-architecture.md",
+        "tests/answers/test_answer_benchmarks.py"
+      ],
+      "allowed_paths": [
+        "src/",
+        "tests/",
+        "tools/",
+        "docs/",
+        "README.md",
+        "context.md",
+        "sprint-plan.md",
+        "WHERE_AM_I.md",
+        "result-review.md"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "docs/answer-benchmark-results.md",
+            "type": "markdown"
+          },
+          {
+            "path": "result-review.md",
+            "type": "markdown"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "docs/answer-benchmark-results.md"
+          },
+          {
+            "type": "markdown_headings_present",
+            "path": "docs/answer-benchmark-results.md",
+            "headings": [
+              "Benchmark Cases",
+              "Results",
+              "Provenance Examples",
+              "Confidence Distribution",
+              "Conflict Examples",
+              "Performance Observations",
+              "Recommendation"
+            ]
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest",
+            "require_collected_tests": true
+          },
+          {
+            "type": "command_succeeds",
+            "command": "BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools"
+          },
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m ruff check src tests tools"
+          },
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m compileall -q src tests tools"
+          },
+          {
+            "type": "command_succeeds",
+            "command": "git diff --check"
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair whatever blocks full verification (pytest, black, ruff, compileall, git diff --check), produce the benchmark document with all seven required headings and a single explicit recommendation, draw every example from fixtures rather than private corpus content, and make project memory match delivered behavior. Keep writes inside the named paths.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_07_independent_review",
+      "name": "Independent review of the governed answer surface (opus)",
+      "routing": {
+        "primary": {
+          "harness": "claude_code",
+          "model": "opus"
+        }
+      },
+      "mission": "Before writing, read AGENTS.md, skills/code-review.md, agents/reviewer.md, context.md (Decisions Locked), docs/answer-architecture.md, docs/answer-benchmark-results.md, and the delivered source and tests. Act as the independent Reviewer. Verify with evidence from the code and by running your own probes: (1) answer() composes strictly over governance.retrieve() and no answer path reaches retrieval, the repository, or the FTS index directly -- prove it, since this is the invariant Sprint 1's S1-R-01 was about; (2) every substantive claim in every benchmark answer carries a citation that resolves to a real knowledge item, and evidence_omitted is genuinely populated rather than always empty; (3) the three absence states are produced from distinguishable inputs and cannot collapse -- construct an inaccessible case and prove it is NOT reported as NOT_FOUND; (4) a detected conflict retains both sides through assembly and no code path silently drops the losing side -- construct one and prove it; (5) confidence is derived, not asserted -- prove an answer built from a single directly-quoted chunk and one built from cross-source synthesis receive different confidence; (6) the benchmark document's claimed results are reproducible from the fixture suite, spot-check at least two independently, and its recommendation is one of the three permitted values; (7) NO runtime dependency was added (pyproject dependencies remain empty) and no LLM client is imported anywhere; (8) NO absolute host path, private corpus content, or credential-shaped detail appears in any tracked file -- run a repository-wide scan for the class, not one pattern, and treat any leak as at least a High finding; (9) the Sprint 1 and 2 invariants still hold (fail-closed principal, permission filtering before evidence assembly, one receipt per released evidence item, governed surface exclusivity, nested-root claiming, health-gated sync). BEFORE YOU FINISH: run 'python3 tools/validate_verdict.py code-reviews/review-sprint-3-governed-answer.verdict.json' and fix everything it reports. Create BOTH the prose review code-reviews/review-sprint-3-governed-answer.md (exact headings Findings, Residual Risks, Verification) AND the verdict code-reviews/review-sprint-3-governed-answer.verdict.json conforming to the builtin review_verdict/v1 schema: top level requires verdict, findings, checks_run, and lenses; every finding requires id, severity, file, location, problem, and proposed_fix (the field is 'proposed_fix', NOT 'fix'); every checks_run entry requires command, exit_code, and summary. Residual Risks must state that the LLM synthesis provider is unimplemented pending dependency approval and that live filesystem verification is deferred. Keep all writes within code-reviews/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/code-review.md",
+        "agents/reviewer.md",
+        "context.md",
+        "docs/answer-architecture.md",
+        "docs/answer-benchmark-results.md",
+        "tools/validate_verdict.py",
+        "result-review.md"
+      ],
+      "allowed_paths": [
+        "code-reviews/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "code-reviews/review-sprint-3-governed-answer.md",
+            "type": "markdown"
+          },
+          {
+            "path": "code-reviews/review-sprint-3-governed-answer.verdict.json",
+            "type": "json"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "code-reviews/review-sprint-3-governed-answer.md"
+          },
+          {
+            "type": "markdown_headings_present",
+            "path": "code-reviews/review-sprint-3-governed-answer.md",
+            "headings": [
+              "Findings",
+              "Residual Risks",
+              "Verification"
+            ]
+          },
+          {
+            "type": "json_schema",
+            "path": "code-reviews/review-sprint-3-governed-answer.verdict.json",
+            "schema_path": "builtin:review_verdict/v1"
+          },
+          {
+            "type": "review_verdict_clean",
+            "path": "code-reviews/review-sprint-3-governed-answer.verdict.json",
+            "severity_threshold": "High"
+          }
+        ],
+        "system": [
+          {
+            "type": "checks_run_match",
+            "path": "code-reviews/review-sprint-3-governed-answer.verdict.json",
+            "timeout_seconds": 300,
+            "advisory": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the review so every invariant is proven by an executed probe rather than asserted, the absence-collapse and conflict-drop cases are actively constructed, the dependency and leak scans are repository-wide, the verdict passes tools/validate_verdict.py, and the required headings and schema fields are present. Keep writes inside code-reviews/.",
+        "after_retries_exhausted": "halt"
+      }
+    }
+  ]
+}
