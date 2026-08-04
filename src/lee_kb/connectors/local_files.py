@@ -48,15 +48,44 @@ produced by :meth:`LocalFilesConnector.checkpoint`. Diffing the current
 :meth:`LocalFilesConnector.discover` result against that snapshot yields
 created, updated, and deleted objects without depending on mtimes, which are
 unreliable across copies, clones, and restores.
+
+Discovery reporting
+--------------------
+
+A document a user expects to be searchable must never disappear without a
+count. :meth:`LocalFilesConnector.discover` returns only the objects that
+made it through; :meth:`LocalFilesConnector.discover_report` returns the
+same objects plus every reason something did not, matching the Employee
+Zero reference (``research/employee-zero-kb-reference.md``, "Build
+Pipeline"):
+
+- ``unhandled_formats`` -- a candidate matched a root's include patterns but
+  no :data:`FORMAT_HANDLERS` entry exists for its lowercase suffix, counted
+  per suffix. This is how the size of the office-format hole is measured
+  before parsing dependencies are approved.
+- ``git_ignored`` -- a candidate git reports as ignored, excluded from the
+  projection like the reference build. Resolved per root with one batched
+  ``git check-ignore -z --stdin`` call rather than one process per file.
+- ``git_unresolved`` -- a candidate whose git-ignore status could not be
+  determined (the root is not inside a git repository, or git is
+  unavailable). Never excluded on this basis alone -- resolution failure
+  degrades to "count it, don't drop it," not a crash.
+
+Token-shaped secret content (credentials that must never enter the
+projection even when the file itself is otherwise indexable) is a separate,
+content-level check applied at sync time; see
+:func:`contains_token_shaped_secret`.
 """
 
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from fnmatch import fnmatchcase
+from functools import lru_cache
 from pathlib import Path
 
 import tomllib
@@ -86,7 +115,11 @@ __all__ = [
     "CONFIG_SCHEMA_VERSION",
     "FormatHandler",
     "FORMAT_HANDLERS",
+    "GLOBAL_DEFAULT_DENY",
+    "OverrideConfig",
     "RootConfig",
+    "DiscoveryReport",
+    "contains_token_shaped_secret",
     "load_config",
     "LocalFilesConnector",
 ]
@@ -97,6 +130,59 @@ CONFIG_SCHEMA_VERSION = 1
 _AUTHORITY_BY_VALUE = {member.value: member for member in Authority}
 _TRUST_BY_VALUE = {member.value: member for member in Trust}
 _VISIBILITY_BY_VALUE = {member.value: member for member in Visibility}
+
+#: Reference-wide exclusions. A root cannot opt these paths back in.
+GLOBAL_DEFAULT_DENY = (
+    "code-reviews/**",
+    ".agent-orch/**",
+    ".agent-orch-scratch/**",
+    "artifacts/**",
+    "tmp/**",
+    ".kb/**",
+    ".git/**",
+)
+
+#: Small, conservative, documented pattern set for content that must never
+#: enter the projection unexamined -- mirrors the unconditional content scan
+#: in the Employee Zero reference (private keys, `api_key=`, `ghp_`, `sk-`,
+#: `xox[baprs]-`). Deliberately narrow: this is a credential-shaped-string
+#: tripwire, not general secret scanning, so it stays cheap to reason about
+#: and does not flood the sync summary with false positives.
+_TOKEN_SHAPED_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),
+    re.compile(r"(?i)api[_-]?key\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}"),
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),
+)
+
+
+def contains_token_shaped_secret(content: str) -> bool:
+    """Return True if ``content`` contains a token-shaped secret pattern.
+
+    Applied at sync time before content is chunked and indexed, so
+    credentials in Lee's real repositories do not enter the projection.
+    """
+    return any(pattern.search(content) for pattern in _TOKEN_SHAPED_PATTERNS)
+
+
+_TOP_LEVEL_KEYS = frozenset({"schema", "roots", "owner", "database", "workspace_root"})
+_ROOT_KEYS = frozenset(
+    {
+        "path",
+        "owner",
+        "include",
+        "exclude",
+        "authority",
+        "trust",
+        "visibility",
+        "project",
+        "required",
+        "external",
+        "overrides",
+    }
+)
+_OVERRIDE_KEYS = frozenset({"pattern", "authority", "trust"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +209,15 @@ FORMAT_HANDLERS: dict[str, FormatHandler] = {
 
 
 @dataclass(frozen=True, slots=True)
+class OverrideConfig:
+    """First-match metadata override for a path within a root."""
+
+    pattern: str
+    authority: Authority | None = None
+    trust: Trust | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class RootConfig:
     """One configured source root."""
 
@@ -136,9 +231,23 @@ class RootConfig:
     visibility: Visibility = Visibility.PRIVATE
     project: str = DEFAULT_PROJECT
     required: bool = True
+    external: bool = False
+    overrides: tuple[OverrideConfig, ...] = ()
+
+    def metadata_for(self, relative_posix: str) -> tuple[Authority, Trust]:
+        """Return declared metadata after applying the first matching override."""
+        for override in self.overrides:
+            if _glob_match(relative_posix, override.pattern):
+                return (
+                    override.authority or self.authority,
+                    override.trust or self.trust,
+                )
+        return self.authority, self.trust
 
 
-def load_config(config_path: str | Path) -> tuple[RootConfig, ...]:
+def load_config(
+    config_path: str | Path, *, workspace_root: str | Path | None = None
+) -> tuple[RootConfig, ...]:
     """Parse a sources.toml file into root configurations.
 
     Raises :class:`ConnectorConfigError` on a missing schema declaration, an
@@ -153,6 +262,12 @@ def load_config(config_path: str | Path) -> tuple[RootConfig, ...]:
     except tomllib.TOMLDecodeError as error:
         raise ConnectorConfigError(f"invalid TOML in {config_path}: {error}") from error
 
+    unknown_keys = _collect_unknown_keys(data)
+    if unknown_keys:
+        raise ConnectorConfigError(
+            "unsupported configuration keys: " + ", ".join(unknown_keys)
+        )
+
     schema = data.get("schema")
     if schema != CONFIG_SCHEMA_VERSION:
         raise ConnectorConfigError(
@@ -164,13 +279,62 @@ def load_config(config_path: str | Path) -> tuple[RootConfig, ...]:
     if not isinstance(raw_roots, dict) or not raw_roots:
         raise ConnectorConfigError("sources.toml must declare at least one root")
 
+    root_base = _resolve_workspace_root(
+        config_path, data.get("workspace_root"), workspace_root
+    )
+
     roots = []
     for name, raw_root in raw_roots.items():
-        roots.append(_parse_root(name, raw_root, config_path.parent))
+        roots.append(_parse_root(name, raw_root, root_base))
     return tuple(roots)
 
 
-def _parse_root(name: str, raw: object, config_dir: Path) -> RootConfig:
+def _collect_unknown_keys(data: dict) -> list[str]:
+    unknown = [
+        f"top-level {key!r}" for key in sorted(set(data).difference(_TOP_LEVEL_KEYS))
+    ]
+    raw_roots = data.get("roots")
+    if not isinstance(raw_roots, dict):
+        return unknown
+    for name, raw_root in raw_roots.items():
+        if not isinstance(raw_root, dict):
+            continue
+        unknown.extend(
+            f"root {name!r} {key!r}"
+            for key in sorted(set(raw_root).difference(_ROOT_KEYS))
+        )
+        overrides = raw_root.get("overrides")
+        if not isinstance(overrides, list):
+            continue
+        for index, override in enumerate(overrides):
+            if not isinstance(override, dict):
+                continue
+            unknown.extend(
+                f"root {name!r} override {index} {key!r}"
+                for key in sorted(set(override).difference(_OVERRIDE_KEYS))
+            )
+    return unknown
+
+
+def _resolve_workspace_root(
+    config_path: Path,
+    configured: object,
+    explicit: str | Path | None,
+) -> Path:
+    if explicit is not None:
+        candidate = Path(explicit).expanduser()
+        return candidate.resolve()
+    if configured is None:
+        return config_path.parent.resolve()
+    if not isinstance(configured, str) or not configured.strip():
+        raise ConnectorConfigError("workspace_root must be a non-empty path string")
+    candidate = Path(configured).expanduser()
+    if not candidate.is_absolute():
+        candidate = config_path.parent / candidate
+    return candidate.resolve()
+
+
+def _parse_root(name: str, raw: object, root_base: Path) -> RootConfig:
     if not isinstance(raw, dict):
         raise ConnectorConfigError(f"root {name!r} must be a table")
 
@@ -179,7 +343,7 @@ def _parse_root(name: str, raw: object, config_dir: Path) -> RootConfig:
         raise ConnectorConfigError(f"root {name!r} is missing a non-empty path")
     path = Path(raw_path)
     if not path.is_absolute():
-        path = config_dir / path
+        path = root_base / path
     path = path.resolve()
 
     owner = raw.get("owner")
@@ -202,10 +366,16 @@ def _parse_root(name: str, raw: object, config_dir: Path) -> RootConfig:
     ):
         raise ConnectorConfigError(f"root {name!r} has an invalid exclude list")
 
-    authority = _lookup(raw, name, "authority", _AUTHORITY_BY_VALUE, Authority.DERIVED)
-    trust = _lookup(raw, name, "trust", _TRUST_BY_VALUE, Trust.CURATED)
+    authority = _lookup(
+        raw, f"root {name!r}", "authority", _AUTHORITY_BY_VALUE, Authority.DERIVED
+    )
+    trust = _lookup(raw, f"root {name!r}", "trust", _TRUST_BY_VALUE, Trust.CURATED)
     visibility = _lookup(
-        raw, name, "visibility", _VISIBILITY_BY_VALUE, Visibility.PRIVATE
+        raw,
+        f"root {name!r}",
+        "visibility",
+        _VISIBILITY_BY_VALUE,
+        Visibility.PRIVATE,
     )
 
     project = raw.get("project", DEFAULT_PROJECT)
@@ -215,6 +385,18 @@ def _parse_root(name: str, raw: object, config_dir: Path) -> RootConfig:
     required = raw.get("required", True)
     if not isinstance(required, bool):
         raise ConnectorConfigError(f"root {name!r} has a non-boolean required flag")
+
+    external = raw.get("external", False)
+    if not isinstance(external, bool):
+        raise ConnectorConfigError(f"root {name!r} has a non-boolean external flag")
+
+    raw_overrides = raw.get("overrides", [])
+    if not isinstance(raw_overrides, list):
+        raise ConnectorConfigError(f"root {name!r} has an invalid overrides list")
+    overrides = tuple(
+        _parse_override(name, index, override)
+        for index, override in enumerate(raw_overrides)
+    )
 
     return RootConfig(
         name=name,
@@ -227,26 +409,151 @@ def _parse_root(name: str, raw: object, config_dir: Path) -> RootConfig:
         visibility=visibility,
         project=project,
         required=required,
+        external=external,
+        overrides=overrides,
     )
 
 
-def _lookup(raw: dict, root_name: str, field: str, table: dict, default):
+def _parse_override(root_name: str, index: int, raw: object) -> OverrideConfig:
+    label = f"root {root_name!r} override {index}"
+    if not isinstance(raw, dict):
+        raise ConnectorConfigError(f"{label} must be a table")
+    pattern = raw.get("pattern")
+    if not isinstance(pattern, str) or not pattern:
+        raise ConnectorConfigError(f"{label} is missing a non-empty pattern")
+    authority = _lookup(raw, label, "authority", _AUTHORITY_BY_VALUE, None)
+    trust = _lookup(raw, label, "trust", _TRUST_BY_VALUE, None)
+    return OverrideConfig(pattern=pattern, authority=authority, trust=trust)
+
+
+def _lookup(raw: dict, context: str, field: str, table: dict, default):
     value = raw.get(field)
     if value is None:
         return default
-    if value not in table:
-        raise ConnectorConfigError(
-            f"root {root_name!r} has an unrecognized {field} {value!r}"
-        )
+    if not isinstance(value, str) or value not in table:
+        raise ConnectorConfigError(f"{context} has an unrecognized {field} {value!r}")
     return table[value]
+
+
+@lru_cache(maxsize=512)
+def _compile_glob(pattern: str) -> re.Pattern[str]:
+    """Compile the reference path-glob dialect to a full-match regex."""
+    pieces: list[str] = []
+    index = 0
+    while index < len(pattern):
+        character = pattern[index]
+        if character == "*":
+            end = index
+            while end < len(pattern) and pattern[end] == "*":
+                end += 1
+            if end - index >= 2:
+                if end < len(pattern) and pattern[end] == "/":
+                    pieces.append("(?:.*/)?")
+                    end += 1
+                else:
+                    pieces.append(".*")
+            else:
+                pieces.append("[^/]*")
+            index = end
+            continue
+        if character == "?":
+            pieces.append("[^/]")
+        elif character == "[":
+            end = index + 1
+            if end < len(pattern) and pattern[end] in "!^":
+                end += 1
+            if end < len(pattern) and pattern[end] == "]":
+                end += 1
+            while end < len(pattern) and pattern[end] != "]":
+                end += 1
+            if end >= len(pattern):
+                pieces.append(r"\[")
+            else:
+                stuff = pattern[index + 1 : end].replace("\\", r"\\")
+                if stuff.startswith("!"):
+                    stuff = "^" + stuff[1:]
+                elif stuff.startswith("^"):
+                    stuff = "\\" + stuff
+                pieces.append(f"(?!/)[{stuff}]")
+                index = end
+        else:
+            pieces.append(re.escape(character))
+        index += 1
+    return re.compile("".join(("^", *pieces, "$")))
+
+
+def _glob_match(relative_posix: str, pattern: str) -> bool:
+    return _compile_glob(pattern).fullmatch(relative_posix) is not None
 
 
 def _matches(
     relative_posix: str, include: Sequence[str], exclude: Sequence[str]
 ) -> bool:
-    if not any(fnmatchcase(relative_posix, pattern) for pattern in include):
+    if any(_glob_match(relative_posix, pattern) for pattern in GLOBAL_DEFAULT_DENY):
         return False
-    return not any(fnmatchcase(relative_posix, pattern) for pattern in exclude)
+    if not any(_glob_match(relative_posix, pattern) for pattern in include):
+        return False
+    return not any(_glob_match(relative_posix, pattern) for pattern in exclude)
+
+
+@dataclass(slots=True)
+class DiscoveryReport:
+    """Everything one :meth:`LocalFilesConnector.discover_report` pass found.
+
+    Every file under a declared root is accounted for in exactly one place:
+    it is either in ``objects``, or counted in ``unhandled_formats``,
+    ``git_ignored``, or ``git_unresolved`` -- so "what did you NOT index,
+    and why?" always has an answer.
+    """
+
+    objects: tuple[SourceObject, ...]
+    #: Lowercase file suffix (e.g. ``".docx"``) to count of matching
+    #: candidates with no registered :data:`FORMAT_HANDLERS` entry.
+    unhandled_formats: dict[str, int]
+    #: Candidates git reports as ignored, excluded from ``objects``.
+    git_ignored: int = 0
+    #: Candidates whose git-ignore status could not be resolved (the root
+    #: is not inside a git repository, or git is unavailable). Included in
+    #: ``objects`` when otherwise eligible -- unresolved is never treated
+    #: as ignored.
+    git_unresolved: int = 0
+
+
+def _git_ignored_relatives(
+    root_path: Path, relatives: Sequence[str]
+) -> tuple[frozenset[str], bool]:
+    """Resolve git-ignore status for candidates under one root.
+
+    Issues a single batched ``git check-ignore -z --stdin`` call rather than
+    one process per file. Returns the subset of ``relatives`` git reports as
+    ignored, and whether resolution succeeded. Degrades gracefully -- never
+    raises -- when the root is not inside a git repository or git is
+    unavailable; callers must count that as unresolved, not as "not
+    ignored" or a crash.
+    """
+    if not relatives:
+        return frozenset(), True
+    payload = b"\x00".join(relative.encode("utf-8") for relative in relatives) + b"\x00"
+    try:
+        result = subprocess.run(
+            ["git", "check-ignore", "-z", "--stdin"],
+            cwd=root_path,
+            input=payload,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return frozenset(), False
+    # 0 = one or more paths ignored, 1 = none ignored, anything else
+    # (typically 128, "not a git repository") is unresolved.
+    if result.returncode not in (0, 1):
+        return frozenset(), False
+    ignored = {
+        chunk.decode("utf-8", errors="replace")
+        for chunk in result.stdout.split(b"\x00")
+        if chunk
+    }
+    return frozenset(ignored), True
 
 
 def _split_object_id(source_object_id: str) -> tuple[str, str]:
@@ -274,29 +581,55 @@ class LocalFilesConnector(Connector):
 
     @classmethod
     def from_config(
-        cls, config_path: str | Path, *, connector_id: str = "local_files"
+        cls,
+        config_path: str | Path,
+        *,
+        connector_id: str = "local_files",
+        workspace_root: str | Path | None = None,
     ) -> "LocalFilesConnector":
         """Build a connector from a sources.toml file."""
-        return cls(load_config(config_path), connector_id=connector_id)
+        return cls(
+            load_config(config_path, workspace_root=workspace_root),
+            connector_id=connector_id,
+        )
 
     @property
     def connector_id(self) -> str:
         return self._connector_id
 
     def discover(self) -> tuple[SourceObject, ...]:
+        return self.discover_report().objects
+
+    def discover_report(self, *, root_name: str | None = None) -> DiscoveryReport:
+        """Discover objects and report every candidate that did not make it.
+
+        With ``root_name`` set, scans only that configured root (used by
+        ``lee-kb sync <connector> <root>`` so the report matches the scope
+        of the sync). Raises :class:`ConnectorReadError` for an unknown
+        root name.
+        """
+        if root_name is not None and root_name not in self._roots_by_name:
+            raise ConnectorReadError(f"unknown root: {root_name!r}")
+        roots = (
+            (self._roots_by_name[root_name],)
+            if root_name is not None
+            else tuple(self._roots_by_name.values())
+        )
+
         objects: list[SourceObject] = []
-        for root in self._roots_by_name.values():
+        unhandled_formats: dict[str, int] = {}
+        git_ignored = 0
+        git_unresolved = 0
+        for root in roots:
             if not root.path.is_dir():
                 continue
             root_base = root.path.resolve()
+            candidates: list[tuple[str, Path]] = []
             for file_path in sorted(root.path.rglob("*")):
                 if not file_path.is_file():
                     continue
                 relative = file_path.relative_to(root.path).as_posix()
                 if not _matches(relative, root.include, root.exclude):
-                    continue
-                handler = FORMAT_HANDLERS.get(file_path.suffix.lower())
-                if handler is None:
                     continue
                 resolved = file_path.resolve()
                 if root_base not in resolved.parents and resolved != root_base:
@@ -305,13 +638,35 @@ class LocalFilesConnector(Connector):
                     # symlink out of the tree) is never handed out, so
                     # discovery and fetch agree on which objects exist.
                     continue
+                candidates.append((relative, file_path))
+
+            ignored, resolved_ok = _git_ignored_relatives(
+                root_base, [relative for relative, _ in candidates]
+            )
+            if not resolved_ok:
+                git_unresolved += len(candidates)
+
+            for relative, file_path in candidates:
+                if resolved_ok and relative in ignored:
+                    git_ignored += 1
+                    continue
+                handler = FORMAT_HANDLERS.get(file_path.suffix.lower())
+                if handler is None:
+                    suffix = file_path.suffix.lower() or "(no extension)"
+                    unhandled_formats[suffix] = unhandled_formats.get(suffix, 0) + 1
+                    continue
                 try:
                     objects.append(self._describe(root, relative, file_path, handler))
                 except ConnectorReadError:
                     # One unreadable candidate degrades discovery to a skip;
                     # it must not abort the whole pass.
                     continue
-        return tuple(objects)
+        return DiscoveryReport(
+            objects=tuple(objects),
+            unhandled_formats=unhandled_formats,
+            git_ignored=git_ignored,
+            git_unresolved=git_unresolved,
+        )
 
     def _describe(
         self, root: RootConfig, relative: str, file_path: Path, handler: FormatHandler
@@ -321,6 +676,7 @@ class LocalFilesConnector(Connector):
             stat = file_path.stat()
         except OSError as error:
             raise ConnectorReadError(f"cannot read {file_path}: {error}") from error
+        authority, trust = root.metadata_for(relative)
         return SourceObject(
             source_object_id=f"{root.name}:{relative}",
             source_locator=SourceLocator(
@@ -332,8 +688,8 @@ class LocalFilesConnector(Connector):
             content_hash=compute_content_hash(raw),
             source_timestamp=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
             project=root.project,
-            authority=root.authority,
-            trust=root.trust,
+            authority=authority,
+            trust=trust,
         )
 
     def list_changes(self, cursor: str | None = None) -> tuple[ObjectChange, ...]:
@@ -389,6 +745,7 @@ class LocalFilesConnector(Connector):
         except UnicodeDecodeError as error:
             raise ConnectorReadError(f"cannot decode {file_path}: {error}") from error
 
+        authority, trust = root.metadata_for(relative)
         return FetchedDocument(
             source_object_id=source_object_id,
             source_locator=SourceLocator(
@@ -402,8 +759,8 @@ class LocalFilesConnector(Connector):
             source_timestamp=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
             project=root.project,
             title=Path(relative).name,
-            authority=root.authority,
-            trust=root.trust,
+            authority=authority,
+            trust=trust,
         )
 
     def refresh(self, source_object_id: str) -> FetchedDocument:

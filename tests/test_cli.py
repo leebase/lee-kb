@@ -49,7 +49,8 @@ def _env(workspace) -> dict:
 def _write_config(workspace, *, include=("*.md",), owner="lee@leebase.com") -> None:
     workspace["corpus"].mkdir(exist_ok=True)
     include_toml = ", ".join(f'"{pattern}"' for pattern in include)
-    workspace["config_path"].write_text(f"""
+    workspace["config_path"].write_text(
+        f"""
 schema = 1
 owner = "lee@leebase.com"
 
@@ -59,7 +60,8 @@ owner = "{owner}"
 include = [{include_toml}]
 visibility = "private"
 project = "default"
-""")
+"""
+    )
 
 
 def test_init_writes_starter_config(workspace) -> None:
@@ -132,6 +134,82 @@ def test_sync_source_scoped_to_one_root(workspace) -> None:
 
     assert result.returncode != 0
     assert "missing-root" in result.stderr
+
+
+def test_sync_workspace_root_flag_overrides_relative_root_base(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    workspace_root = tmp_path / "workspace"
+    (workspace_root / "docs").mkdir(parents=True)
+    (workspace_root / "docs" / "architecture.md").write_text("workspace content")
+    config_path = config_dir / "sources.toml"
+    config_path.write_text(
+        """
+schema = 1
+workspace_root = "../wrong-workspace"
+
+[roots.notes]
+path = "docs"
+owner = "lee@leebase.com"
+include = ["*.md"]
+"""
+    )
+
+    result = run_cli(
+        "sync",
+        "--config",
+        str(config_path),
+        "--workspace-root",
+        str(workspace_root),
+    )
+
+    assert result.returncode == 0
+    assert "1 created" in result.stdout
+
+
+def test_sync_database_flag_writes_projection_at_requested_path(workspace) -> None:
+    workspace["corpus"].mkdir()
+    (workspace["corpus"] / "architecture.md").write_text("database override")
+    _write_config(workspace)
+    database_path = workspace["config_path"].parent / "projection" / "custom.sqlite"
+
+    result = run_cli(
+        "sync",
+        "--database",
+        str(database_path),
+        env_overrides=_env(workspace),
+    )
+
+    assert result.returncode == 0
+    assert database_path.is_file()
+    assert not (workspace["config_path"].parent / "knowledge.sqlite").exists()
+
+
+def test_sync_reports_unhandled_formats_in_summary(workspace) -> None:
+    workspace["corpus"].mkdir()
+    (workspace["corpus"] / "notes.md").write_text("# Notes\n\nindexable")
+    (workspace["corpus"] / "report.docx").write_text("office document placeholder")
+    _write_config(workspace, include=("*.md", "*.docx"))
+
+    result = run_cli("sync", env_overrides=_env(workspace))
+
+    assert result.returncode == 0
+    assert "1 created" in result.stdout
+    assert "1 unhandled format" in result.stdout
+    assert ".docx" in result.stdout
+
+
+def test_sync_reports_skipped_token_shaped_content(workspace) -> None:
+    workspace["corpus"].mkdir()
+    (workspace["corpus"] / "notes.md").write_text("# Notes\n\nindexable")
+    (workspace["corpus"] / "leaked.md").write_text("credential leaked: sk-" + "a" * 24)
+    _write_config(workspace)
+
+    result = run_cli("sync", env_overrides=_env(workspace))
+
+    assert result.returncode == 0
+    assert "1 created" in result.stdout
+    assert "1 skipped (token-shaped content)" in result.stdout
 
 
 def test_search_without_sync_reports_actionable_error(workspace) -> None:

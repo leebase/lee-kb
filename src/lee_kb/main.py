@@ -13,7 +13,7 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -22,7 +22,11 @@ import tomllib
 from . import __version__
 from .chunking import chunk_document
 from .connectors.base import ConnectorConfigError, ConnectorReadError
-from .connectors.local_files import LocalFilesConnector, load_config
+from .connectors.local_files import (
+    LocalFilesConnector,
+    contains_token_shaped_secret,
+    load_config,
+)
 from .contracts import (
     DEFAULT_PROJECT,
     ChangeType,
@@ -70,7 +74,13 @@ owner = "lee@leebase.com"
 
 @dataclass
 class SyncSummary:
-    """Counts of what one sync pass did, for a concise CLI report."""
+    """Counts of what one sync pass did, for a concise CLI report.
+
+    A document that a user expects to be searchable must never disappear
+    without a count: every candidate the sync did not index shows up in
+    exactly one of ``skipped``, ``skipped_token_content``, ``git_ignored``,
+    ``git_unresolved``, or ``unhandled_formats``.
+    """
 
     created: int = 0
     updated: int = 0
@@ -78,6 +88,17 @@ class SyncSummary:
     unchanged: int = 0
     skipped: int = 0
     skipped_objects: tuple[str, ...] = ()
+    #: Fetched content matched a token-shaped secret pattern and was not
+    #: indexed (see lee_kb.connectors.local_files.contains_token_shaped_secret).
+    skipped_token_content: int = 0
+    #: Candidates git reports as ignored, excluded from the projection.
+    git_ignored: int = 0
+    #: Candidates whose git-ignore status could not be resolved (non-git
+    #: root, or git unavailable) -- not excluded, only unverified.
+    git_unresolved: int = 0
+    #: Lowercase file suffix to count of candidates with no registered
+    #: format handler.
+    unhandled_formats: dict[str, int] = field(default_factory=dict)
 
 
 def resolve_config_path(explicit: str | None) -> Path:
@@ -112,7 +133,11 @@ def _load_raw_config(config_path: Path) -> dict:
         raise ConnectorConfigError(f"invalid TOML in {config_path}: {error}") from error
 
 
-def _resolve_database_path(config_path: Path, raw_config: dict) -> Path:
+def _resolve_database_path(
+    config_path: Path, raw_config: dict, explicit: str | None = None
+) -> Path:
+    if explicit:
+        return Path(explicit).expanduser()
     database = raw_config.get("database")
     if isinstance(database, str) and database.strip():
         candidate = Path(database).expanduser()
@@ -189,6 +214,14 @@ def _sync_connector(
             summary.skipped += 1
             summary.skipped_objects += (f"{change.source_object_id}: {error}",)
             continue
+
+        if contains_token_shaped_secret(document.content):
+            # Credentials must not enter the projection: skip indexing and
+            # leave the cursor untouched so the file is re-checked (and
+            # re-reported) every sync until it is redacted or removed.
+            summary.skipped_token_content += 1
+            continue
+
         item = KnowledgeItem(
             item_id=item_id,
             project=document.project,
@@ -215,13 +248,17 @@ def _sync_connector(
         else:
             summary.updated += 1
 
-    discovered = connector.discover()
-    if root_filter is not None:
-        discovered = tuple(
-            obj for obj in discovered if _root_name(obj.source_object_id) == root_filter
-        )
+    report = connector.discover_report(root_name=root_filter)
+    summary.unhandled_formats = report.unhandled_formats
+    summary.git_ignored = report.git_ignored
+    summary.git_unresolved = report.git_unresolved
     summary.unchanged = max(
-        0, len(discovered) - summary.created - summary.updated - summary.skipped
+        0,
+        len(report.objects)
+        - summary.created
+        - summary.updated
+        - summary.skipped
+        - summary.skipped_token_content,
     )
     return summary
 
@@ -229,8 +266,8 @@ def _sync_connector(
 def cmd_sync(args: argparse.Namespace) -> int:
     config_path = resolve_config_path(args.config)
     try:
-        roots = load_config(config_path)
         raw_config = _load_raw_config(config_path)
+        roots = load_config(config_path, workspace_root=args.workspace_root)
     except ConnectorConfigError as error:
         print(f"lee-kb: {error}", file=sys.stderr)
         return 2
@@ -256,7 +293,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
             return 2
 
     connector = LocalFilesConnector(roots, connector_id=connector_name)
-    db_path = _resolve_database_path(config_path, raw_config)
+    db_path = _resolve_database_path(config_path, raw_config, args.database)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -279,6 +316,19 @@ def cmd_sync(args: argparse.Namespace) -> int:
     )
     if summary.skipped:
         line += f", {summary.skipped} skipped"
+    if summary.skipped_token_content:
+        line += f", {summary.skipped_token_content} skipped (token-shaped content)"
+    if summary.git_ignored:
+        line += f", {summary.git_ignored} git-ignored"
+    if summary.git_unresolved:
+        line += f", {summary.git_unresolved} git-ignore status unresolved"
+    if summary.unhandled_formats:
+        total_unhandled = sum(summary.unhandled_formats.values())
+        breakdown = ", ".join(
+            f"{suffix}: {count}"
+            for suffix, count in sorted(summary.unhandled_formats.items())
+        )
+        line += f", {total_unhandled} unhandled format(s) ({breakdown})"
     print(line)
     for note in summary.skipped_objects:
         print(f"lee-kb: skipped {note}", file=sys.stderr)
@@ -447,6 +497,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Single configured source (root) to synchronize.",
     )
     sync_parser.add_argument("--config", help=config_help)
+    sync_parser.add_argument(
+        "--workspace-root",
+        help=(
+            "Resolve relative source-root paths against this directory "
+            "(overrides workspace_root in the config)."
+        ),
+    )
+    sync_parser.add_argument(
+        "--database",
+        help="Write the synchronized SQLite projection to this path.",
+    )
     sync_parser.set_defaults(func=cmd_sync)
 
     search_parser = subparsers.add_parser(
