@@ -76,14 +76,24 @@ OR-matcher fetch-to-exhaustion (Priority 5): confirmed present and now measured 
 
 ## Performance
 
-Sync (`/usr/bin/time -v`, full clean sync of the real corpus):
+Sync (`/usr/bin/time -v`, full clean sync of the real corpus) — pre-repair baseline vs. this post-repair re-measurement (database deleted before the run, so this is also a clean full sync):
 
-- Wall-clock elapsed: **5:20.37 (320.37s)**.
-- User time: 269.69s; system time: 43.78s; CPU utilization: 97%.
-- Peak resident set size: **4,585,924 KB (~4.48 GiB)**.
-- No swaps, no major (I/O-requiring) page faults.
+| Metric | Pre-repair (baseline) | Post-repair (this run) | Delta |
+|---|---:|---:|---:|
+| Wall-clock elapsed | 5:20.37 (320.37s) | 2:51.18 (171.18s) | −149.19s (−46.6%) |
+| User time | 269.69s | 140.78s | −128.91s (−47.8%) |
+| System time | 43.78s | 23.44s | −20.34s (−46.5%) |
+| CPU utilization | 97% | 95% | −2 pts |
+| Peak resident set size | 4,585,924 KB (~4.37 GiB) | 4,568,212 KB (~4.36 GiB) | −17,712 KB (−0.4%) |
+| Swaps / major (I/O) page faults | none | none | unchanged |
 
-Retrieval (`lee-kb search`, wall-clock per query, real corpus already synced):
+The wall-clock and CPU-time drop tracks the S2-R-03 single-discovery-pass repair: the pre-repair sync ran full filesystem discovery (per-root `git check-ignore` batching plus content hashing of every candidate) twice in one sync — once while diffing changes, once again to build the discovery report — and the repair consolidated both onto a single discovery pass. Peak memory is materially unchanged (within 0.4%), which is consistent with that explanation: the repair removes redundant *work*, not redundant *data held in memory* at any one time.
+
+Document and chunk totals from this run are identical to the pre-repair baseline: **1,213 documents, 12,699 chunks**, with identical per-root counts in every row of the Corpus Shape table above, and an identical projection size on disk (21,020,672 bytes). The S2-R-04 nested-root repair did not change which files are indexed as knowledge items in this corpus; see Parity Gaps for what it did change and why.
+
+Sync summary counters also carried forward exactly except for two diagnostics: **1,213 created, 0 updated, 0 deleted, 0 unchanged** matched the baseline, but `git-ignored` dropped from 300 to **14** and `git-ignore status unresolved` stayed at **5**. See Parity Gaps for the explanation.
+
+Retrieval (`lee-kb search`, wall-clock per query, real corpus already synced) — not re-measured this run (out of this step's scope, and document/chunk counts are unchanged so no retrieval-affecting shift is expected); figures below are carried forward unchanged from the pre-repair measurement:
 
 | Query type | Count | Latency range | Mean |
 |---|---:|---|---:|
@@ -100,6 +110,9 @@ The single-common-word query ("the") was the slowest of all 12 at **1.521s**, ro
 - The office-format gap is real and larger than the connector's own summary line can show: 39 office-format files sit inside the configured root paths today, invisible to the sync summary because the deployed `include` patterns never request them. Closing this gap requires both approving parsing dependencies *and* extending the relevant roots' `include` patterns — either alone is insufficient.
 - git-ignored (300) and git-ignore-unresolved (5) are both accounted for and non-blocking; unresolved candidates are still indexed, matching the connector's "count it, don't drop it" contract.
 - OR-matcher fetch-to-exhaustion is now measured, not just theorized: worst case ~1.5s on the current ~1,213-document corpus. Whether this degrades materially once the office-format expansion increases corpus size is not measured here.
+- Post-repair re-measurement (this run, database deleted first for a clean full sync): the S2-R-04 nested-root repair found two real overlaps in the deployed config — `jobsearch`/`agent-in-a-box` and `pr-business`/`pr-research` (confirmed via the connector's own health check, which reports root names only, no paths) — and now has the deepest matching root claim each overlapping file. This changed the sync's `git-ignored` diagnostic counter from 300 to 14 (`git-ignore status unresolved` stayed at 5), because pre-repair, both roots in each overlapping pair independently discovered and separately counted the same ignored candidates in the shared region. It did **not** change indexed document or chunk counts, per-root or total (see Performance) — the overlap region evidently held no file that both roots' `include` patterns matched outside of already-ignored candidates, so no duplicate knowledge item was ever actually created; the repair corrected an inflated diagnostic count and closed the class of bug (duplicate citable evidence for one file) rather than fixing an already-manifested duplication in this specific corpus.
+- The S2-R-03 single-discovery-pass repair changed measured sync performance, not corpus shape: wall-clock dropped ~46.6% (5:20.37 → 2:51.18) with peak memory unchanged within noise, consistent with eliminating one of two redundant full discovery passes that the pre-repair sync ran per invocation.
+- Preserved validator evidence for this step's lineage (not rerun here): `pytest tests/` passed on two independent runs (exit 0, 11.098397s and 11.557784s), tied to the S2-R-04 nested-root and S2-R-03 single-discovery-pass acceptance criteria; `pytest tests/golden/` passed on one independent run (exit 0, 8.119346s), tied to the S1-R-16 baseline-as-contract acceptance criterion. These establish the repaired code and the golden-corpus contract were healthy going into this real-corpus re-measurement.
 
 ## Recommended Next Actions
 

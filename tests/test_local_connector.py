@@ -46,8 +46,7 @@ def write_config(
 ) -> None:
     include_toml = ", ".join(f'"{pattern}"' for pattern in include)
     exclude_toml = ", ".join(f'"{pattern}"' for pattern in exclude)
-    config_path.write_text(
-        f"""
+    config_path.write_text(f"""
 schema = 1
 
 [roots.notes]
@@ -57,8 +56,7 @@ include = [{include_toml}]
 exclude = [{exclude_toml}]
 authority = "{authority}"
 trust = "{trust}"
-"""
-    )
+""")
 
 
 def make_connector(tmp_path, files, **config_kwargs) -> LocalFilesConnector:
@@ -322,8 +320,7 @@ def test_root_overrides_apply_first_matching_authority_and_trust(tmp_path) -> No
     (source_root / "knowledge" / "faq.md").write_text("canonical FAQ")
     (source_root / "knowledge" / "notes.md").write_text("derived notes")
     config_path = tmp_path / "sources.toml"
-    config_path.write_text(
-        f"""
+    config_path.write_text(f"""
 schema = 1
 
 [roots.notes]
@@ -342,8 +339,7 @@ trust = "human_authored"
 pattern = "knowledge/*.md"
 authority = "derived"
 trust = "model_produced"
-"""
-    )
+""")
     connector = LocalFilesConnector.from_config(config_path)
 
     discovered = {obj.source_object_id: obj for obj in connector.discover()}
@@ -372,8 +368,7 @@ def test_config_workspace_root_resolves_relative_source_paths(tmp_path) -> None:
     (workspace_root / "docs").mkdir(parents=True)
     (workspace_root / "docs" / "source.md").write_text("workspace source")
     config_path = config_dir / "sources.toml"
-    config_path.write_text(
-        """
+    config_path.write_text("""
 schema = 1
 workspace_root = "../workspace"
 
@@ -381,8 +376,7 @@ workspace_root = "../workspace"
 path = "docs"
 owner = "lee@leebase.com"
 include = ["*.md"]
-"""
-    )
+""")
 
     roots = load_config(config_path)
     connector = LocalFilesConnector(roots)
@@ -396,16 +390,14 @@ def test_relative_source_path_defaults_to_config_directory(tmp_path) -> None:
     (config_dir / "docs").mkdir(parents=True)
     (config_dir / "docs" / "source.md").write_text("config-relative source")
     config_path = config_dir / "sources.toml"
-    config_path.write_text(
-        """
+    config_path.write_text("""
 schema = 1
 
 [roots.notes]
 path = "docs"
 owner = "lee@leebase.com"
 include = ["*.md"]
-"""
-    )
+""")
 
     roots = load_config(config_path)
 
@@ -414,8 +406,7 @@ include = ["*.md"]
 
 def test_unknown_config_keys_are_collected_across_all_levels(tmp_path) -> None:
     config_path = tmp_path / "sources.toml"
-    config_path.write_text(
-        """
+    config_path.write_text("""
 schema = 1
 unexpected_top = true
 
@@ -428,8 +419,7 @@ unexpected_root = true
 [[roots.notes.overrides]]
 pattern = "faq.md"
 unexpected_override = true
-"""
-    )
+""")
 
     with pytest.raises(ConnectorConfigError) as caught:
         load_config(config_path)
@@ -525,8 +515,7 @@ def test_discover_report_scopes_unhandled_formats_to_requested_root(tmp_path) ->
     (root_a / "alpha.md").write_text("alpha")
     (root_b / "beta.docx").write_text("beta, unhandled format")
     config_path = tmp_path / "sources.toml"
-    config_path.write_text(
-        f"""
+    config_path.write_text(f"""
 schema = 1
 
 [roots.a]
@@ -538,14 +527,83 @@ include = ["*.md"]
 path = "{root_b.as_posix()}"
 owner = "lee@leebase.com"
 include = ["*.docx"]
-"""
-    )
+""")
     connector = LocalFilesConnector.from_config(config_path)
 
     report = connector.discover_report(root_name="b")
 
     assert report.objects == ()
     assert report.unhandled_formats == {".docx": 1}
+
+
+def test_nested_roots_index_file_once_under_most_specific_root(
+    tmp_path, repository
+) -> None:
+    outer = tmp_path / "outer"
+    inner = outer / "inner"
+    inner.mkdir(parents=True)
+    (inner / "shared.md").write_text("one authoritative source document")
+    config_path = tmp_path / "sources.toml"
+    config_path.write_text(f"""
+schema = 1
+
+[roots.outer]
+path = "{outer.as_posix()}"
+owner = "lee@leebase.com"
+include = ["**/*.md"]
+
+[roots.inner]
+path = "{inner.as_posix()}"
+owner = "lee@leebase.com"
+include = ["**/*.md"]
+""")
+    connector = LocalFilesConnector.from_config(config_path)
+
+    discovered = connector.discover()
+    cursor = initial_sync(connector, repository)
+
+    assert [obj.source_object_id for obj in discovered] == ["inner:shared.md"]
+    hits = repository.search("authoritative", project=DEFAULT_PROJECT, limit=5)
+    assert [hit.item.item_id.source_object_id for hit in hits] == ["inner:shared.md"]
+    assert len(repository.journal_entries()) == 1
+    assert cursor
+    health = connector.health()
+    assert health.healthy
+    assert "nested roots detected" in health.detail
+    assert "outer -> inner" in health.detail
+
+
+def test_nested_root_claim_is_stable_across_repeated_discovery(tmp_path) -> None:
+    outer = tmp_path / "outer"
+    inner = outer / "inner"
+    inner.mkdir(parents=True)
+    (inner / "shared.md").write_text("stable source identity")
+    config_path = tmp_path / "sources.toml"
+    config_path.write_text(f"""
+schema = 1
+
+[roots.inner]
+path = "{inner.as_posix()}"
+owner = "lee@leebase.com"
+include = ["**/*.md"]
+
+[roots.outer]
+path = "{outer.as_posix()}"
+owner = "lee@leebase.com"
+include = ["**/*.md"]
+""")
+    connector = LocalFilesConnector.from_config(config_path)
+
+    first_objects = connector.discover()
+    cursor = connector.checkpoint(first_objects)
+    changes = connector.list_changes(cursor)
+    second_objects = connector.discover()
+
+    first = tuple(obj.source_object_id for obj in first_objects)
+    second = tuple(obj.source_object_id for obj in second_objects)
+    assert first == second == ("inner:shared.md",)
+    assert changes == ()
+    assert connector.checkpoint(second_objects) == cursor
 
 
 def test_git_ignored_candidates_are_excluded_and_counted(tmp_path) -> None:
@@ -568,6 +626,28 @@ def test_git_ignored_candidates_are_excluded_and_counted(tmp_path) -> None:
     assert {obj.source_object_id for obj in report.objects} == {"notes:keep.md"}
     assert report.git_ignored == 1
     assert report.git_unresolved == 0
+
+
+def test_declared_root_ignored_by_ancestor_is_unresolved_not_suppressed(
+    tmp_path,
+) -> None:
+    repository_root = tmp_path / "repository"
+    source_root = repository_root / "ignored" / "source"
+    source_root.mkdir(parents=True)
+    (source_root / "note.md").write_text("explicitly configured source")
+    subprocess.run(
+        ["git", "init", "-q"], cwd=repository_root, check=True, capture_output=True
+    )
+    (repository_root / ".gitignore").write_text("ignored/\n")
+    config_path = tmp_path / "sources.toml"
+    write_config(config_path, source_root)
+    connector = LocalFilesConnector.from_config(config_path)
+
+    report = connector.discover_report()
+
+    assert {obj.source_object_id for obj in report.objects} == {"notes:note.md"}
+    assert report.git_ignored == 0
+    assert report.git_unresolved == 1
 
 
 def test_non_git_root_degrades_gracefully_and_counts_unresolved(

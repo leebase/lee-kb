@@ -16,6 +16,7 @@
 | Sprint | Status | Completion |
 |--------|--------|------------|
 | Sprint 1 — Personal Foundation | 🟢 Delivered | 7/7 sprint tasks complete for the scoped slice; office formats and the curated golden benchmark explicitly deferred |
+| Sprint 2 — Real-Corpus Parity & Post-Parity Repairs | 🟡 In progress | Real-corpus parity measured (P1); review-surfaced repairs S2-R-04, S2-R-03, S1-R-16 complete and re-verified; office-format dependency approval, the OR-matcher decision, and the curated golden benchmark remain open |
 
 ## What's Happening Now
 
@@ -33,11 +34,21 @@ documents) for the first time (see
 measurement sized the office-format gap precisely (39 files: 32 `.docx`, 5
 `.xlsx`, 2 `.pptx`, invisible to the connector's own sync summary because
 every root's deployed `include` patterns are markdown-only) and produced a
-first real-corpus performance and retrieval-quality baseline. The Next
-Actions Queue below is re-ranked in light of those findings; the highest
-priority is now approving office-format parsing dependencies together with
+first real-corpus performance and retrieval-quality baseline. An independent
+review of that measurement (`code-reviews/review-sprint-2-p1-real-corpus.md`,
+verdict `pass`) surfaced correctness and performance findings against the
+code it exercised; three (S2-R-04 nested/overlapping-root correctness,
+S2-R-03 single-discovery-pass performance, S1-R-16 golden-baseline-as-
+contract) are now repaired and re-verified, and the corpus was re-measured
+post-repair (see `evidence/real-corpus-parity-report.md`): sync wall-clock
+dropped 46.6% (5:20.37 → 2:51.18) with corpus shape and chunk counts
+unchanged. Full verification (`pytest`, `black --check`, `ruff check`) is
+green. The Next Actions Queue below is re-ranked accordingly; the highest
+priority is still approving office-format parsing dependencies together with
 extending the affected roots' `include` patterns, since the real corpus
-proved both are required and neither alone closes the gap.
+proved both are required and neither alone closes the gap — that approval,
+the OR-matcher decision, and the curated golden benchmark all remain open,
+pending Lee.
 
 ### Recently Completed
 
@@ -58,6 +69,11 @@ proved both are required and neither alone closes the gap.
 - ✅ S1-07: `lee-kb init`/`sync`/`search` CLI (`src/lee_kb/main.py`) implemented and exercised end to end; full test suite (109 tests, including the golden corpus) passes; `black --check` and `ruff check` pass on `src` and `tests`.
 - ✅ Real-corpus parity measurement: `lee-kb sync`/`search` run against the actual deployed `ai-employee-factory/knowledge/sources.toml` (15 roots, ~1,200 documents) for the first time, resolving Open Question 4. Findings recorded in `evidence/real-corpus-parity-report.md`: 1,213 live items / 12,699 chunks synced cleanly (zero fetch failures, all 13 canonical overrides took effect correctly); the office-format gap is real and now sized at 39 files (32 `.docx`, 5 `.xlsx`, 2 `.pptx`), invisible to the sync summary because every root's `include` patterns are markdown-only; OR-matcher worst case measured at ~1.521s on this corpus size; 8/10 category queries returned the correct top citation, 2 returned a topically-adjacent but non-canonical document (a BM25 ranking limitation, not a discovery defect); sync baseline recorded at 5:20.37 wall-clock, ~4.48 GiB peak RSS. Office-format handlers remain unregistered pending dependency approval — no change to that deferral.
 - ✅ This step: full verification re-confirmed green (`black --check` and `ruff check` run clean with no fixes needed; `pytest tests/` and `sync --help` reconfirmed via preserved validator evidence from this run, not rerun). `README.md` updated to document the previously-undocumented `--workspace-root` and `--database` flags on `lee-kb sync`.
+- ✅ Independent review of the real-corpus parity slice (`code-reviews/review-sprint-2-p1-real-corpus.md`, verdict `pass`) found no Critical or High finding; three findings from it are now repaired (below).
+- ✅ S2-R-04 (nested/overlapping-root correctness): `LocalFilesConnector` now claims each overlapping file with exactly one root — the deepest matching resolved root, ties broken by root name (`_claiming_root`, `_find_nested_roots` in `src/lee_kb/connectors/local_files.py`); `health()` reports detected nested-root pairs; a parent-repository ignore rule that would otherwise suppress an entire configured root is now surfaced as unresolved rather than silently dropping the root. Regression tests added to `tests/test_local_connector.py`.
+- ✅ S2-R-03 (single discovery pass per sync): `_sync_connector` (`src/lee_kb/main.py`) now calls `connector.discover_report()` once and derives its change list from that report, instead of running a full discovery-and-hash pass twice per sync. Re-measured on the real corpus: wall-clock 5:20.37 → 2:51.18 (−46.6%), user time −47.8%, peak RSS unchanged within noise (−0.4%); document/chunk totals unchanged (1,213 / 12,699). See `evidence/real-corpus-parity-report.md` Performance.
+- ✅ S1-R-16 (golden baseline enforced as a contract): `tests/golden/test_golden_corpus.py::test_recorded_baseline_metrics_are_enforced_by_the_harness` computes hit-at-1/hit-at-10/MRR through the governed `retrieve()` surface and fails (tolerance 0.01, symmetric) if they drift from the recorded gate in `docs/golden-baseline.md` in either direction.
+- ✅ This step: full verification driven green. `pytest` was not rerun (validator rerun not permitted for this step; see `result-review.md` for the four preserved validator records this reports from, all exit 0, tied to S2-R-04, S2-R-03, S1-R-16, and the post-repair real-corpus re-measurement). `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` and `python3 -m ruff check src tests tools` were run fresh: both initially failed (2 files needed `black` reformatting; a resulting `ruff` line-length finding was fixed by hand); both are clean as of this step, no behavioral change.
 
 ### In Progress
 
@@ -140,27 +156,29 @@ proved both are required and neither alone closes the gap.
 2. Which parsing libraries are approved for .docx/.xlsx/.pptx? Now sized precisely: 39 files (32 `.docx`, 5 `.xlsx`, 2 `.pptx`) sit inside the 15 real configured root paths, concentrated in `ai-employee-book` (21 `.docx`) and `tviq` (9 files); ten of the 15 roots have zero office-format files. Office formats require new runtime dependencies, which need explicit approval per project constraints, **and** the affected roots' `include` patterns must be extended — approving dependencies alone will not surface these files. The contracts and format-handler registry already support adding handlers without redesign.
 3. Where does the Agent Board identity model live today, and what does lee-kb consume — a library, a service, or a shared schema? (Not blocking for the personal `lee` principal, which runs with no Agent Board dependency; relevant once a second principal or consumer needs identity.)
 4. ~~Does this checkout have access to the real `knowledge/sources.toml`...~~ **Resolved 2026-08-03**: yes. All 15 configured roots resolved to real, present directories; a full clean sync produced 1,213 live items / 12,699 chunks, closely tracking the `research/employee-zero-kb-reference.md` snapshot (1,209 documents / 12,634 chunks). See `evidence/real-corpus-parity-report.md`.
-5. Is the OR-matcher's measured worst case (~1.521s for a single ubiquitous token, on the current ~1,213-document corpus) acceptable as-is, or does it need a page-size cap / early-exit heuristic before corpus size grows further via office-format ingestion? (New question raised by the real-corpus measurement; see `evidence/real-corpus-parity-report.md` Performance and Recommended Next Actions.)
+5. Is the OR-matcher's measured worst case (~1.521s for a single ubiquitous token, on the current ~1,213-document corpus) acceptable as-is, or does it need a page-size cap / early-exit heuristic before corpus size grows further via office-format ingestion? Still open: the S2-R-03 sync-performance repair improved *sync* wall-clock, not *retrieval* latency, and this figure was carried forward unchanged, not re-measured, in the post-repair run. (See `evidence/real-corpus-parity-report.md` Performance and Recommended Next Actions.)
 
 ## Next Actions Queue
 
-Priority order re-ranked by Lee 2026-08-03 after the real-corpus parity
-measurement (`evidence/real-corpus-parity-report.md`): the measurement
-resolved Open Question 4 and sized the office-format gap precisely, so
-approving those dependencies and extending `include` patterns now leads;
-a known correctness defect and the OR-matcher decision follow before
-benchmark and connector work.
+Re-ranked 2026-08-03 after S2-R-04 (nested/overlapping-root correctness),
+S2-R-03 (single-discovery-pass performance), and S1-R-16 (baseline-as-
+contract) were repaired and re-verified (see `result-review.md` and
+`evidence/real-corpus-parity-report.md`). Those three items are dropped from
+the queue below, having been completed; everything else shifts up one rank.
+Office-format dependency approval remains the top blocker, unchanged by this
+step's repairs.
 
 | Rank | Action | Owner | Done When |
 |------|--------|-------|-----------|
 | 1 | Approve `.docx`/`.xlsx`/`.pptx` parsing libraries, register format handlers, **and** extend the `include` patterns on the affected roots (real corpus measurement: 39 files, concentrated in `ai-employee-book` and `tviq` — parity is impossible without both dependency approval and the pattern change) | Human approval + Builder | Dependencies approved and added; `FORMAT_HANDLERS` covers office formats; affected roots' `include` patterns updated; unhandled include-matched files are reported, not silently invisible; tests added |
-| 2 | Fix S1-R-14: `discover()` and `_resolve()` must share one resolved root base (correctness; fix before office-format ingestion touches more root paths or any customer deployment) | Builder | A directly built `RootConfig` over a symlinked root discovers and fetches consistently; regression test added |
+| 2 | Fix S1-R-14: `discover()` and `_resolve()` must share one resolved root base (correctness; distinct from the now-repaired S2-R-04 nested-root claiming logic — this is about `discover()`'s containment check using `root.path.resolve()` while `_resolve()` uses unresolved `root.path`; fix before office-format ingestion touches more root paths or any customer deployment) | Builder | A directly built `RootConfig` over a symlinked root discovers and fetches consistently; regression test added |
 | 3 | Decide whether the OR-matcher's measured ~1.521s worst case (Open Question 5) is acceptable as-is or needs a page-size cap / early-exit heuristic before corpus size grows via office-format ingestion | Human + Builder | Decision recorded in `architecture.md` or a backlog item; if a heuristic is chosen, implemented and re-measured against the real corpus |
-| 4 | Assert the retrieval baseline in the harness (S1-R-16): compute hit-at-1/hit-at-10/MRR and fail if they regress from `docs/golden-baseline.md` beyond a stated tolerance | Builder | The benchmark is a contract, not documentation |
-| 5 | Curate the real golden benchmark from Lee's recurring Chief of Staff questions, using the two ranking edge cases surfaced by the real-corpus measurement (one job-search, one knowledge-discovery query, each topically-adjacent-but-non-canonical) as concrete starting material | Human + Builder | `docs/golden-baseline.md` reports results against the curated corpus |
-| 6 | File the Agent-Orch defect: continuation runs record `launch: null`, making crashed continuations unresumable | Human + Platform | Backlog item exists in agent-orch with the OS1-contract reference |
-| 7 | Implement the Outlook/Microsoft 365 email connector | Human + Planner | Connector scoped, approved, and implemented against the `Connector` contract |
-| 8 | Resolve Open Question 1 (Employee Zero parity scope for live mission status and dossier validation) | Human + Planner | Parity scope decision recorded in `architecture.md` or `product-definition.md` |
+| 4 | Curate the real golden benchmark from Lee's recurring Chief of Staff questions, using the two ranking edge cases surfaced by the real-corpus measurement (one job-search, one knowledge-discovery query, each topically-adjacent-but-non-canonical) as concrete starting material | Human + Builder | `docs/golden-baseline.md` reports results against the curated corpus |
+| 5 | File the Agent-Orch defect: continuation runs record `launch: null`, making crashed continuations unresumable | Human + Platform | Backlog item exists in agent-orch with the OS1-contract reference |
+| 6 | Implement the Outlook/Microsoft 365 email connector | Human + Planner | Connector scoped, approved, and implemented against the `Connector` contract |
+| 7 | Resolve Open Question 1 (Employee Zero parity scope for live mission status and dossier validation) | Human + Planner | Parity scope decision recorded in `architecture.md` or `product-definition.md` |
+
+Also open, advisory (not ranked — lower severity, from the same review): S2-R-05 through S2-R-11 in `code-reviews/review-sprint-2-p1-real-corpus.md` (docstring/partition-accuracy fixes, two narrative-count corrections in the evidence report, a commit-message traceability gap, a stale test-count reference, a `ruff` config deprecation, and two missing regression tests).
 
 ## Working Conventions
 
@@ -181,7 +199,8 @@ benchmark and connector work.
 
 ## Environment Notes
 
-- **Working Directory:** `/Volumes/lee-linux-projects/lee-kb`
+- **Working Directory:** a local checkout of this repository (path intentionally
+  not recorded — this repository is public; see S2-R-01, S2-R-02, S2-R-12)
 - **Project Name:** `lee-kb`
 - **Profile:** Python package / governed retrieval service
 - **Author:** Lee Harrington

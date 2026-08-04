@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,9 +18,15 @@ from lee_kb.repository import SQLiteRepository
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORPUS_PATH = Path(__file__).with_name("corpus.toml")
+BASELINE_DOC_PATH = REPO_ROOT / "docs" / "golden-baseline.md"
 SYNC_TIME = datetime(2030, 1, 1, 9, 0, tzinfo=timezone.utc)
 RETRIEVAL_TIME = datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc)
 DEFAULT_PROJECT = "default"
+# One percentage point / 0.01 MRR. Loose enough to absorb the doc's rounding
+# to one decimal place, tight enough that a single question's rank moving by
+# one place (let alone the "every answer from rank 1 to rank 10" regression
+# S1-R-16 exists to catch) crosses it in either direction.
+METRIC_TOLERANCE = 0.01
 SCOPE_CONTROL_PROJECT = "scope-control"
 EXPECTED_CATEGORIES = {
     "operational_status",
@@ -219,3 +227,85 @@ def test_unauthorized_principal_is_denied_before_evidence_assembly(repository) -
     assert bundle.citations == ()
     assert bundle.receipts == ()
     assert bundle.denied_count >= 1
+
+
+def _first_matching_rank(
+    bundle, expected_source: str, expected_token: str
+) -> int | None:
+    """Rank (1-based) of the first evidence item citing expected_source/token, else
+    None."""
+    for rank, evidence in enumerate(bundle.evidence, start=1):
+        if (
+            evidence.citation.source_locator.label == expected_source
+            and expected_token.casefold() in evidence.text.casefold()
+        ):
+            return rank
+    return None
+
+
+def _parse_recorded_baseline() -> dict[str, float]:
+    """Read hit-at-1, hit-at-10, and MRR from docs/golden-baseline.md.
+
+    Reads the gate from the document instead of duplicating it as a second
+    hardcoded copy, so the two cannot silently drift apart.
+    """
+    text = BASELINE_DOC_PATH.read_text(encoding="utf-8")
+    hit_at_1 = re.search(
+        r"Expected-citation hit rate at 1:\s*\*\*\d+/\d+ \(([\d.]+)%\)\*\*", text
+    )
+    hit_at_10 = re.search(
+        r"Expected-citation hit rate at 10:\s*\*\*\d+/\d+ \(([\d.]+)%\)\*\*", text
+    )
+    mrr = re.search(r"Mean reciprocal rank:\s*\*\*([\d.]+)\*\*", text)
+    assert hit_at_1 and hit_at_10 and mrr, (
+        "Could not parse the Baseline section of docs/golden-baseline.md; "
+        "update the parser in test_golden_corpus.py if its wording changed."
+    )
+    return {
+        "hit_at_1": float(hit_at_1.group(1)) / 100.0,
+        "hit_at_10": float(hit_at_10.group(1)) / 100.0,
+        "mrr": float(mrr.group(1)),
+    }
+
+
+def test_recorded_baseline_metrics_are_enforced_by_the_harness(repository) -> None:
+    """Guard S1-R-16: hit-at-1, hit-at-10, and MRR must match the recorded gate.
+
+    Computes the metrics over the golden corpus through the governed
+    retrieve() surface, using the same hit definition documented in
+    docs/golden-baseline.md (declared source + evidence token present in the
+    governed top-10; rank is the first matching citation's position). A
+    ranking regression that pushed every answer to the back of the result
+    set would fail this test even though the existing per-question
+    assertions -- which only check "somewhere in the top 10" -- would stay
+    green. The comparison is symmetric (math.isclose), so an unrecorded
+    *improvement* beyond tolerance fails just as loudly as a regression:
+    docs/golden-baseline.md must be the thing that changes, not just the code.
+    """
+    ranks: list[int] = []
+    for case in POSITIVE_CASES:
+        bundle = _run(repository, case)
+        rank = _first_matching_rank(
+            bundle,
+            str(case["expected_source"]),
+            str(case["expected_evidence_token"]),
+        )
+        assert rank is not None, f"{case['id']} lost its top-10 citation entirely"
+        ranks.append(rank)
+
+    total = len(POSITIVE_CASES)
+    observed = {
+        "hit_at_1": sum(1 for rank in ranks if rank == 1) / total,
+        "hit_at_10": sum(1 for rank in ranks if rank <= 10) / total,
+        "mrr": sum(1.0 / rank for rank in ranks) / total,
+    }
+    recorded = _parse_recorded_baseline()
+
+    for metric, observed_value in observed.items():
+        recorded_value = recorded[metric]
+        assert math.isclose(observed_value, recorded_value, abs_tol=METRIC_TOLERANCE), (
+            f"{metric} drifted from the docs/golden-baseline.md gate: "
+            f"observed {observed_value:.4f}, recorded {recorded_value:.4f} "
+            f"(tolerance {METRIC_TOLERANCE}). If retrieval regressed, fix it; "
+            "if it genuinely improved, re-record docs/golden-baseline.md."
+        )

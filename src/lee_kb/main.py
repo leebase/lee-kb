@@ -21,7 +21,12 @@ import tomllib
 
 from . import __version__
 from .chunking import chunk_document
-from .connectors.base import ConnectorConfigError, ConnectorReadError
+from .connectors.base import (
+    ConnectorConfigError,
+    ConnectorReadError,
+    ObjectChange,
+    SourceObject,
+)
 from .connectors.local_files import (
     LocalFilesConnector,
     contains_token_shaped_secret,
@@ -159,6 +164,52 @@ def _encode_cursor(snapshot: dict) -> str:
     return json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
 
 
+def _changes_from_objects(
+    objects: tuple[SourceObject, ...],
+    previous: dict[str, str],
+    *,
+    root_filter: str | None,
+) -> tuple[ObjectChange, ...]:
+    """Diff one discovery result against the stored snapshot cursor."""
+    current = {
+        obj.source_object_id: obj.content_hash
+        for obj in objects
+        if root_filter is None or _root_name(obj.source_object_id) == root_filter
+    }
+    changes: list[ObjectChange] = []
+    for source_object_id, content_hash in current.items():
+        previous_hash = previous.get(source_object_id)
+        if previous_hash is None:
+            changes.append(
+                ObjectChange(
+                    source_object_id,
+                    ChangeType.CREATED,
+                    content_hash=content_hash,
+                )
+            )
+        elif previous_hash != content_hash:
+            changes.append(
+                ObjectChange(
+                    source_object_id,
+                    ChangeType.UPDATED,
+                    content_hash=content_hash,
+                    previous_content_hash=previous_hash,
+                )
+            )
+    for source_object_id, previous_hash in previous.items():
+        if root_filter is not None and _root_name(source_object_id) != root_filter:
+            continue
+        if source_object_id not in current:
+            changes.append(
+                ObjectChange(
+                    source_object_id,
+                    ChangeType.DELETED,
+                    previous_content_hash=previous_hash,
+                )
+            )
+    return tuple(sorted(changes, key=lambda change: change.source_object_id))
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     config_path = resolve_config_path(args.config)
     if config_path.exists() and not args.force:
@@ -185,13 +236,12 @@ def _sync_connector(
 ) -> SyncSummary:
     previous_cursor = repository.get_connector_cursor(connector.connector_id)
     snapshot = _decode_cursor(previous_cursor)
-    changes = connector.list_changes(previous_cursor)
-    if root_filter is not None:
-        changes = tuple(
-            change
-            for change in changes
-            if _root_name(change.source_object_id) == root_filter
-        )
+    report = connector.discover_report(root_name=root_filter)
+    changes = _changes_from_objects(
+        report.objects,
+        snapshot,
+        root_filter=root_filter,
+    )
 
     summary = SyncSummary()
     for change in changes:
@@ -248,7 +298,6 @@ def _sync_connector(
         else:
             summary.updated += 1
 
-    report = connector.discover_report(root_name=root_filter)
     summary.unhandled_formats = report.unhandled_formats
     summary.git_ignored = report.git_ignored
     summary.git_unresolved = report.git_unresolved
@@ -293,6 +342,24 @@ def cmd_sync(args: argparse.Namespace) -> int:
             return 2
 
     connector = LocalFilesConnector(roots, connector_id=connector_name)
+
+    # A required root that has become unreachable (unmounted drive, moved or
+    # renamed repository) would otherwise be skipped silently and simply
+    # produce a smaller corpus (S2-R-13). Check health before syncing so the
+    # root is named, and refuse the pass rather than record a projection that
+    # is quietly missing a source the operator declared required.
+    status = connector.health()
+    if not status.healthy:
+        print(f"lee-kb: sync refused: {status.detail}", file=sys.stderr)
+        print(
+            "lee-kb: fix the path or set required = false for that root "
+            "in the configuration.",
+            file=sys.stderr,
+        )
+        return 1
+    if status.detail and status.detail != "all roots reachable":
+        print(f"lee-kb: {status.detail}", file=sys.stderr)
+
     db_path = _resolve_database_path(config_path, raw_config, args.database)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 

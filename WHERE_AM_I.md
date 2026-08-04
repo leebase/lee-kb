@@ -10,7 +10,7 @@
 | **Project** | Lee Knowledge Base (`lee-kb`) |
 | **Profile** | Python package / governed retrieval service |
 | **Current Phase** | Phase 1 — Sprint 1 Personal Foundation delivered |
-| **Overall Status** | 🟢 First governed retrieval path (local files → SQLite → lexical evidence) delivered and now measured against the real deployed Employee Zero corpus (15 roots, 1,213 documents); office formats and the curated golden benchmark remain deferred |
+| **Overall Status** | 🟢 First governed retrieval path (local files → SQLite → lexical evidence) delivered and measured against the real deployed Employee Zero corpus (15 roots, 1,213 documents); the independent review of that measurement is repaired (S2-R-04 nested-root correctness, S2-R-03 single-discovery-pass performance, S1-R-16 baseline-as-contract) and re-verified, with sync wall-clock down 46.6% post-repair; office formats and the curated golden benchmark remain unimplemented, deferred |
 | **Last Updated** | 2026-08-03 |
 
 ## Progress Against Product Goals
@@ -55,6 +55,7 @@ which the connector's own sync summary can see today because every root's
 | Sprint | Focus | Status |
 |--------|-------|--------|
 | Sprint 1 — Personal Foundation | Local documents → SQLite → lexical evidence | 🟢 Delivered (office formats and curated golden benchmark deferred) |
+| Sprint 2 — Real-Corpus Parity & Post-Parity Repairs | Measure Sprint 1 against the real deployed Employee Zero corpus; repair what the measurement and its review surfaced | 🟡 In progress (real-corpus measurement and S2-R-04/S2-R-03/S1-R-16 repairs complete; office-format approval, the OR-matcher decision, and the curated golden benchmark remain open, pending Lee) |
 
 ## Product Risks and Blockers
 
@@ -64,7 +65,8 @@ which the connector's own sync summary can see today because every root's
 | Connector APIs differ in change tracking and freshness | Sync correctness may vary by source | 🟡 Open | Local-file connector uses content-hash snapshot diffing; the email connector (next) will validate the contract against a source with a native change feed |
 | Provider abstractions could become over-designed | Slows first useful release | 🟢 Resolved for v1 | SQLite repository and lexical retriever implemented behind the smallest useful `Repository`/retriever interfaces |
 | Research patterns may imply enterprise scale too early | Scope drift | 🟢 Controlled | Sprint 1 stayed scoped to personal deployment, local documents, SQLite, and lexical search; office formats and semantic retrieval were deliberately deferred rather than pulled forward |
-| OR-matcher fetch-to-exhaustion could degrade further as corpus size grows | Slow retrieval on common-word queries | 🟡 Open | Measured at ~1.521s worst case on the real ~1,213-document corpus (`evidence/real-corpus-parity-report.md`); not yet measured at larger corpus size (e.g. after office-format ingestion); a page-size cap or early-exit heuristic is an open decision, not yet built |
+| OR-matcher fetch-to-exhaustion could degrade further as corpus size grows | Slow retrieval on common-word queries | 🟡 Open | Measured at ~1.521s worst case on the real ~1,213-document corpus (`evidence/real-corpus-parity-report.md`); carried forward unchanged in the post-repair re-measurement (the S2-R-03 repair improved sync performance, not retrieval latency); not yet measured at larger corpus size (e.g. after office-format ingestion); a page-size cap or early-exit heuristic is an open decision, not yet built |
+| Nested/overlapping configured roots could double-count one file as two independently citable knowledge items | Duplicate, inconsistent evidence for one source document | 🟢 Resolved (S2-R-04) | `LocalFilesConnector` now claims each overlapping file with exactly one root — the deepest matching resolved root, ties broken by root name; `health()` reports detected nested-root pairs; regression tests added (`tests/test_local_connector.py`) |
 
 ## Key Decisions
 

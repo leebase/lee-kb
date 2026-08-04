@@ -49,6 +49,16 @@ produced by :meth:`LocalFilesConnector.checkpoint`. Diffing the current
 created, updated, and deleted objects without depending on mtimes, which are
 unreliable across copies, clones, and restores.
 
+Nested roots
+------------
+
+Configured roots may overlap, but one resolved file is claimed by exactly one
+root. When a file matches more than one root, the most specific (deepest)
+resolved root wins; equal-depth ties are resolved by root name. This keeps
+``source_object_id`` stable across discovery passes and prevents one source
+document from producing independently citable duplicate evidence. Nested-root
+detection is reported by :meth:`LocalFilesConnector.health`.
+
 Discovery reporting
 --------------------
 
@@ -67,9 +77,10 @@ Pipeline"):
   projection like the reference build. Resolved per root with one batched
   ``git check-ignore -z --stdin`` call rather than one process per file.
 - ``git_unresolved`` -- a candidate whose git-ignore status could not be
-  determined (the root is not inside a git repository, or git is
-  unavailable). Never excluded on this basis alone -- resolution failure
-  degrades to "count it, don't drop it," not a crash.
+  determined (the root is not inside a git repository, git is unavailable,
+  or an ancestor ignore rule suppresses the configured root itself). Never
+  excluded on this basis alone -- resolution failure degrades to "count it,
+  don't drop it," not a crash.
 
 Token-shaped secret content (credentials that must never enter the
 projection even when the file itself is otherwise indexable) is a separate,
@@ -513,9 +524,9 @@ class DiscoveryReport:
     #: Candidates git reports as ignored, excluded from ``objects``.
     git_ignored: int = 0
     #: Candidates whose git-ignore status could not be resolved (the root
-    #: is not inside a git repository, or git is unavailable). Included in
-    #: ``objects`` when otherwise eligible -- unresolved is never treated
-    #: as ignored.
+    #: is not inside a git repository, git is unavailable, or an ancestor
+    #: ignore rule suppresses the configured root). Included in ``objects``
+    #: when otherwise eligible -- unresolved is never treated as ignored.
     git_unresolved: int = 0
 
 
@@ -528,12 +539,19 @@ def _git_ignored_relatives(
     one process per file. Returns the subset of ``relatives`` git reports as
     ignored, and whether resolution succeeded. Degrades gracefully -- never
     raises -- when the root is not inside a git repository or git is
-    unavailable; callers must count that as unresolved, not as "not
-    ignored" or a crash.
+    unavailable, or when an ancestor ignore rule suppresses the configured
+    root itself; callers must count that as unresolved, not as "not ignored"
+    or a crash.
     """
     if not relatives:
         return frozenset(), True
-    payload = b"\x00".join(relative.encode("utf-8") for relative in relatives) + b"\x00"
+    # Include the declared root itself in the same batch. If an ignore rule
+    # above the root suppresses ``.`` then every descendant would otherwise
+    # appear ignored, even though the root was explicitly configured as a
+    # source. Treat that situation as unresolved so discovery remains
+    # fail-visible and does not silently drop the entire root.
+    checked_paths = (".", *relatives)
+    payload = b"\x00".join(path.encode("utf-8") for path in checked_paths) + b"\x00"
     try:
         result = subprocess.run(
             ["git", "check-ignore", "-z", "--stdin"],
@@ -553,6 +571,8 @@ def _git_ignored_relatives(
         for chunk in result.stdout.split(b"\x00")
         if chunk
     }
+    if "." in ignored:
+        return frozenset(), False
     return frozenset(ignored), True
 
 
@@ -563,6 +583,24 @@ def _split_object_id(source_object_id: str) -> tuple[str, str]:
         )
     root_name, _, relative = source_object_id.partition(":")
     return root_name, relative
+
+
+def _find_nested_roots(
+    roots: Sequence[RootConfig],
+) -> tuple[tuple[str, str], ...]:
+    """Return deterministic ``(parent, child)`` pairs for overlapping roots."""
+    resolved = tuple((root, root.path.resolve()) for root in roots)
+    nested: list[tuple[str, str]] = []
+    for index, (left, left_path) in enumerate(resolved):
+        for right, right_path in resolved[index + 1 :]:
+            if left_path == right_path:
+                parent, child = sorted((left.name, right.name))
+                nested.append((parent, child))
+            elif left_path in right_path.parents:
+                nested.append((left.name, right.name))
+            elif right_path in left_path.parents:
+                nested.append((right.name, left.name))
+    return tuple(sorted(nested))
 
 
 class LocalFilesConnector(Connector):
@@ -578,6 +616,10 @@ class LocalFilesConnector(Connector):
             raise ConnectorConfigError("at least one root is required")
         self._connector_id = connector_id
         self._roots_by_name = {root.name: root for root in roots}
+        self._resolved_paths_by_name = {
+            root.name: root.path.resolve() for root in self._roots_by_name.values()
+        }
+        self._nested_roots = _find_nested_roots(tuple(self._roots_by_name.values()))
 
     @classmethod
     def from_config(
@@ -638,6 +680,8 @@ class LocalFilesConnector(Connector):
                     # symlink out of the tree) is never handed out, so
                     # discovery and fetch agree on which objects exist.
                     continue
+                if self._claiming_root(root, resolved) is not root:
+                    continue
                 candidates.append((relative, file_path))
 
             ignored, resolved_ok = _git_ignored_relatives(
@@ -666,6 +710,26 @@ class LocalFilesConnector(Connector):
             unhandled_formats=unhandled_formats,
             git_ignored=git_ignored,
             git_unresolved=git_unresolved,
+        )
+
+    def _claiming_root(self, discovered_root: RootConfig, resolved: Path) -> RootConfig:
+        """Choose the deterministic root identity for one resolved file."""
+        matches = [discovered_root]
+        for root in self._roots_by_name.values():
+            if root is discovered_root or not root.path.is_dir():
+                continue
+            root_base = self._resolved_paths_by_name[root.name]
+            if root_base != resolved and root_base not in resolved.parents:
+                continue
+            candidate_relative = resolved.relative_to(root_base).as_posix()
+            if _matches(candidate_relative, root.include, root.exclude):
+                matches.append(root)
+        return min(
+            matches,
+            key=lambda root: (
+                -len(self._resolved_paths_by_name[root.name].parts),
+                root.name,
+            ),
         )
 
     def _describe(
@@ -784,11 +848,20 @@ class LocalFilesConnector(Connector):
             if root.required and not root.path.is_dir()
         )
         healthy = not missing_required
-        detail = (
+        reachability_detail = (
             "all roots reachable"
             if healthy
             else f"missing required roots: {', '.join(missing_required)}"
         )
+        detail = reachability_detail
+        if self._nested_roots:
+            pairs = ", ".join(
+                f"{parent} -> {child}" for parent, child in self._nested_roots
+            )
+            detail += (
+                "; nested roots detected "
+                f"(deepest matching root claims overlaps): {pairs}"
+            )
         return HealthStatus(
             healthy=healthy,
             checked_at=datetime.now(timezone.utc),

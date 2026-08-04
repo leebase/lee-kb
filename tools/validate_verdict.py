@@ -41,7 +41,9 @@ def validate(document: object) -> list[str]:
 
     verdict = document.get("verdict")
     if verdict is not None and verdict not in VALID_VERDICTS:
-        problems.append(f"verdict must be one of {sorted(VALID_VERDICTS)}, got {verdict!r}")
+        problems.append(
+            f"verdict must be one of {sorted(VALID_VERDICTS)}, got {verdict!r}"
+        )
 
     findings = document.get("findings")
     if findings is not None and not isinstance(findings, list):
@@ -58,7 +60,9 @@ def validate(document: object) -> list[str]:
                         hint = " (found 'fix' — the required field is 'proposed_fix')"
                     problems.append(f"findings[{index}]: missing {key}{hint}")
                 elif not _nonempty_string(finding[key]):
-                    problems.append(f"findings[{index}]: {key} must be a non-empty string")
+                    problems.append(
+                        f"findings[{index}]: {key} must be a non-empty string"
+                    )
             severity = finding.get("severity")
             if severity is not None and severity not in VALID_SEVERITIES:
                 problems.append(

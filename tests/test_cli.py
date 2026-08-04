@@ -9,6 +9,7 @@ evidence.
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -49,8 +50,7 @@ def _env(workspace) -> dict:
 def _write_config(workspace, *, include=("*.md",), owner="lee@leebase.com") -> None:
     workspace["corpus"].mkdir(exist_ok=True)
     include_toml = ", ".join(f'"{pattern}"' for pattern in include)
-    workspace["config_path"].write_text(
-        f"""
+    workspace["config_path"].write_text(f"""
 schema = 1
 owner = "lee@leebase.com"
 
@@ -60,8 +60,7 @@ owner = "{owner}"
 include = [{include_toml}]
 visibility = "private"
 project = "default"
-"""
-    )
+""")
 
 
 def test_init_writes_starter_config(workspace) -> None:
@@ -143,8 +142,7 @@ def test_sync_workspace_root_flag_overrides_relative_root_base(tmp_path) -> None
     (workspace_root / "docs").mkdir(parents=True)
     (workspace_root / "docs" / "architecture.md").write_text("workspace content")
     config_path = config_dir / "sources.toml"
-    config_path.write_text(
-        """
+    config_path.write_text("""
 schema = 1
 workspace_root = "../wrong-workspace"
 
@@ -152,8 +150,7 @@ workspace_root = "../wrong-workspace"
 path = "docs"
 owner = "lee@leebase.com"
 include = ["*.md"]
-"""
-    )
+""")
 
     result = run_cli(
         "sync",
@@ -183,6 +180,46 @@ def test_sync_database_flag_writes_projection_at_requested_path(workspace) -> No
     assert result.returncode == 0
     assert database_path.is_file()
     assert not (workspace["config_path"].parent / "knowledge.sqlite").exists()
+
+
+def test_sync_discovers_corpus_once_per_pass(tmp_path, monkeypatch) -> None:
+    from lee_kb.connectors.local_files import LocalFilesConnector, RootConfig
+    from lee_kb.main import _sync_connector
+    from lee_kb.repository import SQLiteRepository
+
+    corpus = tmp_path / "notes"
+    corpus.mkdir()
+    (corpus / "notes.md").write_text("# Notes\n\none discovery pass")
+    connector = LocalFilesConnector(
+        (
+            RootConfig(
+                name="notes",
+                path=corpus,
+                owner="lee@leebase.com",
+                include=("*.md",),
+            ),
+        )
+    )
+    discover_report = connector.discover_report
+    invocation_count = 0
+
+    def counted_discover_report(*, root_name=None):
+        nonlocal invocation_count
+        invocation_count += 1
+        return discover_report(root_name=root_name)
+
+    monkeypatch.setattr(connector, "discover_report", counted_discover_report)
+
+    with SQLiteRepository(tmp_path / "knowledge.sqlite") as repository:
+        summary = _sync_connector(
+            connector,
+            repository,
+            root_filter=None,
+            sync_timestamp=datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc),
+        )
+
+    assert invocation_count == 1
+    assert summary.created == 1
 
 
 def test_sync_reports_unhandled_formats_in_summary(workspace) -> None:
@@ -254,3 +291,49 @@ def test_search_default_principal_is_configured_owner(workspace) -> None:
 
     assert result.returncode == 0
     assert "architecture.md" in result.stdout
+
+
+def test_sync_refuses_when_a_required_root_is_unreachable(workspace) -> None:
+    """An unreachable required root is named, not silently skipped (S2-R-13)."""
+    _write_config(workspace)
+    (workspace["corpus"] / "note.md").write_text("# Note\n\ncontent")
+    assert run_cli("sync", env_overrides=_env(workspace)).returncode == 0
+
+    # The declared root disappears the way an unmounted drive or a renamed
+    # repository would.
+    for child in workspace["corpus"].iterdir():
+        child.unlink()
+    workspace["corpus"].rmdir()
+
+    result = run_cli("sync", env_overrides=_env(workspace))
+
+    assert result.returncode == 1
+    assert "notes" in result.stderr
+    assert "required" in result.stderr.lower()
+    assert "Synced" not in result.stdout
+
+
+def test_sync_succeeds_when_an_optional_root_is_unreachable(workspace) -> None:
+    """required = false keeps a missing root from blocking the pass."""
+    workspace["corpus"].mkdir(exist_ok=True)
+    (workspace["corpus"] / "note.md").write_text("# Note\n\ncontent")
+    workspace["config_path"].write_text(f"""
+schema = 1
+owner = "lee@leebase.com"
+
+[roots.notes]
+path = "{workspace['corpus'].as_posix()}"
+owner = "lee@leebase.com"
+include = ["*.md"]
+
+[roots.gone]
+path = "{(workspace['corpus'].parent / 'not-here').as_posix()}"
+owner = "lee@leebase.com"
+include = ["*.md"]
+required = false
+""")
+
+    result = run_cli("sync", env_overrides=_env(workspace))
+
+    assert result.returncode == 0
+    assert "1 created" in result.stdout

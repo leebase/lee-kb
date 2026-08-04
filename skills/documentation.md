@@ -39,3 +39,23 @@ Exact commands and expected outcomes.
 - Link new work to a sprint task or backlog item.
 - Record source IDs, timestamps, permission behavior, and receipt fields when retrieval behavior changes.
 - Do not update status to complete until the stated verification has actually run.
+
+## Publication rule (this repository is public)
+
+Every tracked file — including project memory, playbooks, and evidence — is
+published. Before committing, run a repository-wide scan for absolute host
+paths, not a pattern-specific one:
+
+```bash
+git ls-files -z | xargs -0 grep -nEI "(/Volumes/|/Users/|/home/|/mnt/|/media/|[A-Z]:\\\\)"
+```
+
+Findings S2-R-01, S2-R-02, and S2-R-12 were all this same disclosure class,
+caught in three separate places (gitignore coverage, playbooks, project
+memory). Each earlier scan was narrowed to the pattern that had just been
+found, so the next instance survived. Scan for the class, not the instance.
+
+Permitted: root-level source names and aggregate statistics. Never: corpus
+locations, document titles or content, credentials, or a real host path.
+Illustrative placeholder paths in docstrings and test fixtures are fine when
+they are obviously not a real location.

@@ -3,6 +3,101 @@
 > **Running log of completed work.** Newest entries are at the top. Each entry
 > records what changed, why it matters, and how to verify it.
 
+## 2026-08-03 — Sprint 2 correctness and performance repairs (S2-R-04, S2-R-03, S1-R-16); full verification green
+
+### What Was Built
+
+Three findings from the independent review of the real-corpus parity slice
+(`code-reviews/review-sprint-2-p1-real-corpus.md`, verdict `pass`) were
+repaired and re-verified:
+
+- **S2-R-04 (Medium, correctness)** — nested/overlapping configured roots
+  could silently double-count one on-disk file as two independently citable
+  knowledge items, because identity is `(connector, "root:relative")` and
+  nothing detected root overlap. `LocalFilesConnector` now resolves every
+  root's absolute path once at construction and, at discovery time, has each
+  candidate file claimed by exactly one root: the deepest matching resolved
+  root wins, with root name as the tiebreaker for equal-depth ties
+  (`_claiming_root`, `_find_nested_roots` in
+  `src/lee_kb/connectors/local_files.py`). `health()` now reports detected
+  nested-root pairs. A related edge case in the same area was hardened at the
+  same time: `_git_ignored_relatives` now also checks the configured root
+  path itself, so a parent-repository ignore rule that would otherwise
+  suppress an entire root is surfaced as unresolved rather than silently
+  dropping the root's files. Regression tests were added to
+  `tests/test_local_connector.py`.
+- **S2-R-03 (Medium, efficiency)** — one sync pass discovered and hashed the
+  whole corpus twice: `list_changes()` (called by `_sync_connector`) ran a
+  full `discover()` → `discover_report()` pass, and `_sync_connector` then
+  called `discover_report()` a second time purely to obtain counters. On the
+  real corpus this was the largest contributor to the recorded 5:20.37
+  wall-clock and ~4.48 GiB peak RSS baseline. `_sync_connector` now calls
+  `connector.discover_report()` exactly once per sync and derives the change
+  list from that single report's objects via a new `_changes_from_objects`
+  helper (`src/lee_kb/main.py`). Regression coverage was added to
+  `tests/test_local_connector.py` and `tests/test_cli.py`.
+- **S1-R-16 (baseline-as-contract)** — the golden evaluation baseline
+  (60.0% hit-at-1 / 100% hit-at-10 / 0.766 MRR, `docs/golden-baseline.md`)
+  was previously documentation only; nothing failed if retrieval quality
+  regressed. `tests/golden/test_golden_corpus.py` now adds
+  `test_recorded_baseline_metrics_are_enforced_by_the_harness`, which
+  computes hit-at-1/hit-at-10/MRR over the golden corpus through the governed
+  `retrieve()` surface and asserts each metric is within 0.01 (symmetric
+  `math.isclose`, so an unrecorded *improvement* fails just as loudly as a
+  regression) of the value parsed live out of `docs/golden-baseline.md`.
+
+This step also drove full verification to green. `pytest` was not rerun —
+validator rerun is not permitted for this step; see How to Verify below for
+the preserved evidence this report is based on. `BLACK_NUM_WORKERS=1
+python3 -m black --check src tests tools` and `python3 -m ruff check src
+tests tools` were run fresh: both initially failed (`black` wanted to
+reformat `tests/golden/test_golden_corpus.py` and `tools/validate_verdict.py`;
+after reformatting, `ruff` still flagged one over-length docstring line in
+`tests/golden/test_golden_corpus.py`, wrapped by hand). Both commands are
+clean as of this step, with no behavioral change.
+
+### Why It Matters
+
+S2-R-04 closes a real correctness gap before office-format ingestion touches
+more root paths: the deployed config already has two overlapping root pairs
+(confirmed via `health()`), and without this fix an environment where
+git-ignore resolution fails on the overlap (already true for 2 of 15 roots
+in the real corpus, `git_unresolved = 5`) would index the overlapping files
+twice, each independently citable. S2-R-03 removes redundant work from the
+sync path measured, on the real ~1,213-document corpus, as a 149.19s
+(−46.6%) wall-clock drop (5:20.37 → 2:51.18) and a 128.91s (−47.8%) user-time
+drop, with peak memory unchanged within noise (−0.4%) — consistent with
+eliminating a duplicate discovery pass rather than reducing data held in
+memory at any one time; document and chunk totals (1,213 / 12,699) are
+unchanged. S1-R-16 turns the retrieval baseline into an executable contract,
+per the Sprint 1 closure requirement that the benchmark must be a contract,
+not documentation.
+
+**Explicitly not implemented by this step or any prior step:** office-format
+(`.docx`/`.xlsx`/`.pptx`) parsing remains unregistered, pending both Lee's
+approval of new parsing dependencies and extending the affected roots'
+`include` patterns in the deployed configuration — neither alone closes the
+gap, per `evidence/real-corpus-parity-report.md`. The curated Chief-of-Staff
+golden benchmark also still does not exist; the 20-question generated corpus
+in `tests/golden/` proves the evaluation harness only.
+
+### How to Verify
+
+Preserved system-validator evidence for this step (`agent_orch.validators.command_succeeds@1`; validator rerun not permitted, so these are reported, not re-executed):
+
+| # | Command | Exit | Duration (s) | Tied to | Evidence hash |
+|---|---------|-----:|--------------:|---------|---------------|
+| 1 | `python3 -m pytest tests/` | 0 | 11.098397 | S2-R-04 (nested-root duplicate evidence) | `2fbcb7284519f032d351a931c3902d9d16b03b1c39d5fd4d68b6ffb75bbce4d1` |
+| 2 | `python3 -m pytest tests/` | 0 | 11.557784 | S2-R-03 (single discovery pass) | `665641ffa5949a4d0bbafa130108b0de65993142825b8e8c879af3be55537737` |
+| 3 | `python3 -m pytest tests/golden/` | 0 | 8.119346 | S1-R-16 (baseline as contract) | `4af5f782bb8f9b7c29f81412903cb402dc4da2c00401d803fae9d7036c1f868e` |
+| 4 | `python3 -m pytest tests/` | 0 | 12.598738 | Real-corpus re-measurement after the repairs | `f36ac9565b571ee3e4949e2c1b0939ee57fbef26d3c7127d4d5f5b435414db1e` |
+
+Fresh in this step (not preserved evidence):
+
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` — clean: `All done! ... 19 files would be left unchanged.`, exit 0.
+- `python3 -m ruff check src tests tools` — clean: `All checks passed!`, exit 0 (one pre-existing deprecation warning about `pyproject.toml`'s top-level linter settings, tracked as S2-R-10, out of this step's scope).
+- `evidence/real-corpus-parity-report.md` — the post-repair sync re-measurement (Performance section) and `code-reviews/review-sprint-2-p1-real-corpus.md` — the independent review these repairs respond to (verdict `pass`).
+
 ## 2026-08-03 — Real-corpus parity measurement (P1c) and verification (P1d)
 
 ### What Was Built
