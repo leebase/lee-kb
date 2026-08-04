@@ -50,7 +50,8 @@ def _env(workspace) -> dict:
 def _write_config(workspace, *, include=("*.md",), owner="lee@leebase.com") -> None:
     workspace["corpus"].mkdir(exist_ok=True)
     include_toml = ", ".join(f'"{pattern}"' for pattern in include)
-    workspace["config_path"].write_text(f"""
+    workspace["config_path"].write_text(
+        f"""
 schema = 1
 owner = "lee@leebase.com"
 
@@ -60,7 +61,8 @@ owner = "{owner}"
 include = [{include_toml}]
 visibility = "private"
 project = "default"
-""")
+"""
+    )
 
 
 def test_init_writes_starter_config(workspace) -> None:
@@ -142,7 +144,8 @@ def test_sync_workspace_root_flag_overrides_relative_root_base(tmp_path) -> None
     (workspace_root / "docs").mkdir(parents=True)
     (workspace_root / "docs" / "architecture.md").write_text("workspace content")
     config_path = config_dir / "sources.toml"
-    config_path.write_text("""
+    config_path.write_text(
+        """
 schema = 1
 workspace_root = "../wrong-workspace"
 
@@ -150,7 +153,8 @@ workspace_root = "../wrong-workspace"
 path = "docs"
 owner = "lee@leebase.com"
 include = ["*.md"]
-""")
+"""
+    )
 
     result = run_cli(
         "sync",
@@ -313,11 +317,107 @@ def test_sync_refuses_when_a_required_root_is_unreachable(workspace) -> None:
     assert "Synced" not in result.stdout
 
 
+def test_ask_without_sync_reports_actionable_error(workspace) -> None:
+    _write_config(workspace)
+
+    result = run_cli("ask", "anything", env_overrides=_env(workspace))
+
+    assert result.returncode != 0
+    assert "sync" in result.stderr.lower()
+    assert "Traceback" not in result.stderr
+
+
+def test_ask_end_to_end_prints_answer_citations_confidence_and_receipt(
+    workspace,
+) -> None:
+    workspace["corpus"].mkdir()
+    (workspace["corpus"] / "architecture.md").write_text(
+        "# Architecture\n\n"
+        "lee-kb is a governed knowledge fabric. "
+        "The retention policy requires ninety days of storage."
+    )
+    _write_config(workspace)
+    run_cli("sync", env_overrides=_env(workspace))
+
+    result = run_cli("ask", "retention policy storage", env_overrides=_env(workspace))
+
+    assert result.returncode == 0
+    assert "Q: retention policy storage" in result.stdout
+    assert "retention policy" in result.stdout
+    assert "Confidence: directly_evidenced" in result.stdout
+    assert "Citations:" in result.stdout
+    assert "architecture.md" in result.stdout
+    assert "receipted at" in result.stdout
+
+
+def test_ask_denies_evidence_for_unauthorized_principal(workspace) -> None:
+    workspace["corpus"].mkdir()
+    (workspace["corpus"] / "architecture.md").write_text(
+        "# Architecture\n\nprivate content for lee only."
+    )
+    _write_config(workspace)
+    run_cli("sync", env_overrides=_env(workspace))
+
+    result = run_cli(
+        "ask",
+        "private",
+        "--principal",
+        "someone-else@example.com",
+        env_overrides=_env(workspace),
+    )
+
+    assert result.returncode == 0
+    assert "inaccessible" in result.stdout.lower()
+    assert "withheld" in result.stdout.lower()
+    assert "private content for lee only" not in result.stdout
+
+
+def test_ask_reports_not_found_for_an_unmatched_question(workspace) -> None:
+    workspace["corpus"].mkdir()
+    (workspace["corpus"] / "architecture.md").write_text(
+        "# Architecture\n\nlee-kb is a governed knowledge fabric."
+    )
+    _write_config(workspace)
+    run_cli("sync", env_overrides=_env(workspace))
+
+    result = run_cli(
+        "ask",
+        "an entirely unrelated missing telescope topic",
+        env_overrides=_env(workspace),
+    )
+
+    assert result.returncode == 0
+    assert "not_found" in result.stdout.lower()
+    assert "searched projects" in result.stdout.lower()
+
+
+def test_ask_database_flag_reads_projection_at_requested_path(workspace) -> None:
+    workspace["corpus"].mkdir()
+    (workspace["corpus"] / "architecture.md").write_text(
+        "# Architecture\n\nunique-ask-token appears here."
+    )
+    _write_config(workspace)
+    database_path = workspace["config_path"].parent / "projection" / "custom.sqlite"
+    run_cli("sync", "--database", str(database_path), env_overrides=_env(workspace))
+
+    result = run_cli(
+        "ask",
+        "unique-ask-token",
+        "--database",
+        str(database_path),
+        env_overrides=_env(workspace),
+    )
+
+    assert result.returncode == 0
+    assert "architecture.md" in result.stdout
+
+
 def test_sync_succeeds_when_an_optional_root_is_unreachable(workspace) -> None:
     """required = false keeps a missing root from blocking the pass."""
     workspace["corpus"].mkdir(exist_ok=True)
     (workspace["corpus"] / "note.md").write_text("# Note\n\ncontent")
-    workspace["config_path"].write_text(f"""
+    workspace["config_path"].write_text(
+        f"""
 schema = 1
 owner = "lee@leebase.com"
 
@@ -331,7 +431,8 @@ path = "{(workspace['corpus'].parent / 'not-here').as_posix()}"
 owner = "lee@leebase.com"
 include = ["*.md"]
 required = false
-""")
+"""
+    )
 
     result = run_cli("sync", env_overrides=_env(workspace))
 

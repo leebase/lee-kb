@@ -7,9 +7,9 @@
 
 | Attribute | Value |
 |-----------|-------|
-| **Phase** | Phase 1 — Sprint 1 Personal Foundation delivered |
+| **Phase** | Phase 1 — Sprint 3 (governed `answer()` surface) delivered |
 | **Mode** | 2 (Collaborative implementation with approval) |
-| **Last Updated** | 2026-08-03 |
+| **Last Updated** | 2026-08-04 |
 
 ### Sprint Status
 
@@ -17,6 +17,7 @@
 |--------|--------|------------|
 | Sprint 1 — Personal Foundation | 🟢 Delivered | 7/7 sprint tasks complete for the scoped slice; office formats and the curated golden benchmark explicitly deferred |
 | Sprint 2 — Real-Corpus Parity & Post-Parity Repairs | 🟡 In progress | Real-corpus parity measured (P1); review-surfaced repairs S2-R-04, S2-R-03, S1-R-16 complete and re-verified; office-format dependency approval, the OR-matcher decision, and the curated golden benchmark remain open |
+| Sprint 3 — Governed `answer()` Surface | 🟢 Delivered, review repairs in progress | Contracts, evidence selection, absence/conflict identification, `answer()` assembly, the `lee-kb ask` CLI, and permanent regression fixtures for 15 benchmark items across seven families are complete and verified (`docs/answer-benchmark-results.md`); the three High findings from the independent review (S3-R-01, S3-R-02, S3-R-03) are repaired and regression-tested; five Medium/Low findings (S3-R-04, S3-R-05, S3-R-07, S3-R-08, S3-R-09) remain open; the LLM-backed synthesis provider and live filesystem verification of `ask` are explicit deferrals, not gaps |
 
 ## What's Happening Now
 
@@ -74,10 +75,36 @@ pending Lee.
 - ✅ S2-R-03 (single discovery pass per sync): `_sync_connector` (`src/lee_kb/main.py`) now calls `connector.discover_report()` once and derives its change list from that report, instead of running a full discovery-and-hash pass twice per sync. Re-measured on the real corpus: wall-clock 5:20.37 → 2:51.18 (−46.6%), user time −47.8%, peak RSS unchanged within noise (−0.4%); document/chunk totals unchanged (1,213 / 12,699). See `evidence/real-corpus-parity-report.md` Performance.
 - ✅ S1-R-16 (golden baseline enforced as a contract): `tests/golden/test_golden_corpus.py::test_recorded_baseline_metrics_are_enforced_by_the_harness` computes hit-at-1/hit-at-10/MRR through the governed `retrieve()` surface and fails (tolerance 0.01, symmetric) if they drift from the recorded gate in `docs/golden-baseline.md` in either direction.
 - ✅ This step: full verification driven green. `pytest` was not rerun (validator rerun not permitted for this step; see `result-review.md` for the four preserved validator records this reports from, all exit 0, tied to S2-R-04, S2-R-03, S1-R-16, and the post-repair real-corpus re-measurement). `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` and `python3 -m ruff check src tests tools` were run fresh: both initially failed (2 files needed `black` reformatting; a resulting `ruff` line-length finding was fixed by hand); both are clean as of this step, no behavioral change.
+- ✅ Sprint 3 (governed `answer()` surface): `docs/answer-architecture.md` locks the design; `src/lee_kb/answer_contracts.py` defines `Confidence`, `AbsenceKind`, `OmissionReason`, `Claim`, `Conflict`, `Absence`, `Answer`, and `SynthesisProvider` with construction-time provenance, disjointness, and absence invariants; `src/lee_kb/answer_evidence.py` selects source-diverse evidence with every rejection reasoned; `src/lee_kb/answer_absence.py` classifies `NOT_FOUND`/`INACCESSIBLE`/`UNKNOWN` without collapsing them, including a cited evidenced-absence path; `src/lee_kb/answer_conflict.py` detects pairwise conflicts with `newer`/`more_authoritative` signals and no winner; `src/lee_kb/answer.py` assembles `answer()` strictly on top of the unmodified `retrieve()`, with `DeterministicSynthesisProvider` as the offline, standard-library-only default narrator; `lee-kb ask` (`src/lee_kb/main.py`) is the CLI surface.
+- ✅ `tests/answers/test_answer_benchmarks.py` is a permanent, offline regression suite for seven benchmark families (cross-repository claim assembly, fuzzy matching, cross-repository attribution breadth, authoritative evidenced absence, conflict identification without a winner, duplicate-source suppression, and end-to-end provenance/receipt closure), synced through the real connector and repository against a synthetic corpus — 12/12 collected items pass. Results, concrete provenance/conflict examples, confidence distribution, and latency observations are recorded in `docs/answer-benchmark-results.md`; recommendation: **Ready after specific follow-up**.
+- ✅ This step: full verification driven green (`black --check`, `ruff check`, `compileall`, and `git diff --check` all run fresh and clean over `src tests tools`; `pytest` not rerun — validator rerun not permitted for this step; see `result-review.md` for the nine preserved validator records this reports from). Two pre-existing, unrelated issues were fixed to get there: `tests/test_local_connector.py` had drifted out of `black` formatting, and a stray gitignored `tests/._test_bootstrap_cli.py` macOS metadata file broke `compileall` and was removed. `README.md` now documents `lee-kb ask`.
+- ✅ Repair of the three High findings from the Sprint 3 review
+  (`code-reviews/review-sprint-3-governed-answer.md`, verdict `fail`):
+  **S3-R-01** (same-authority contradictions merged into one
+  self-contradictory `SYNTHESIZED` claim with no conflict shown) —
+  `_conflict_signal` now also fires on value-word divergence between
+  same-subject statements, and claim assembly refuses to merge evidence whose
+  value words diverge; **S3-R-02** (an unrelated absence-shaped sentence
+  could short-circuit a responsive, evidenced answer) — the evidenced-absence
+  path now runs only over already-selected evidence and requires the
+  matched sentence to clear the same relevance threshold and be top-ranked;
+  **S3-R-03** (a merged claim split by one conflicting pair could be
+  resurrected by a later pair, double-citing chunks) — `detect_conflicts` now
+  updates its evidence-to-claim map transitively the moment a merge is split.
+  Each fix ships with its own permanent regression fixture in
+  `tests/answers/test_answer_benchmarks.py` (now 15 collected items, up from
+  12). Full suite: 241 passed (preserved validator evidence, two independent
+  runs, both exit 0); `black --check`, `ruff check`, `compileall`, and `git
+  diff --check` all re-driven fresh and clean, no repairs needed.
+  `docs/answer-benchmark-results.md` rewritten to reflect the repaired
+  behavior, including a corrected Confidence Distribution (S3-R-06 fixed as a
+  byproduct) and a new same-authority Conflict Example. The review's five
+  Medium/Low findings (S3-R-04, S3-R-05, S3-R-07, S3-R-08, S3-R-09) are
+  **not** addressed by this step and remain open — see Next Actions Queue.
 
 ### In Progress
 
-- None. Sprint 1 is closed for the scoped slice; see Next Actions Queue for follow-on work.
+- None. Sprint 1, Sprint 2's P1 slice, and Sprint 3 are each closed for their scoped work; see Next Actions Queue for follow-on work.
 
 ### Recently Decided (2026-08-03 architecture review)
 
@@ -156,29 +183,44 @@ pending Lee.
 2. Which parsing libraries are approved for .docx/.xlsx/.pptx? Now sized precisely: 39 files (32 `.docx`, 5 `.xlsx`, 2 `.pptx`) sit inside the 15 real configured root paths, concentrated in `ai-employee-book` (21 `.docx`) and `tviq` (9 files); ten of the 15 roots have zero office-format files. Office formats require new runtime dependencies, which need explicit approval per project constraints, **and** the affected roots' `include` patterns must be extended — approving dependencies alone will not surface these files. The contracts and format-handler registry already support adding handlers without redesign.
 3. Where does the Agent Board identity model live today, and what does lee-kb consume — a library, a service, or a shared schema? (Not blocking for the personal `lee` principal, which runs with no Agent Board dependency; relevant once a second principal or consumer needs identity.)
 4. ~~Does this checkout have access to the real `knowledge/sources.toml`...~~ **Resolved 2026-08-03**: yes. All 15 configured roots resolved to real, present directories; a full clean sync produced 1,213 live items / 12,699 chunks, closely tracking the `research/employee-zero-kb-reference.md` snapshot (1,209 documents / 12,634 chunks). See `evidence/real-corpus-parity-report.md`.
-5. Is the OR-matcher's measured worst case (~1.521s for a single ubiquitous token, on the current ~1,213-document corpus) acceptable as-is, or does it need a page-size cap / early-exit heuristic before corpus size grows further via office-format ingestion? Still open: the S2-R-03 sync-performance repair improved *sync* wall-clock, not *retrieval* latency, and this figure was carried forward unchanged, not re-measured, in the post-repair run. (See `evidence/real-corpus-parity-report.md` Performance and Recommended Next Actions.)
+5. Is the OR-matcher's measured worst case (~1.521s for a single ubiquitous token, on the current ~1,213-document corpus) acceptable as-is, or does it need a page-size cap / early-exit heuristic before corpus size grows further via office-format ingestion? Still open: the S2-R-03 sync-performance repair improved *sync* wall-clock, not *retrieval* latency, and this figure was carried forward unchanged, not re-measured, in the post-repair run. `answer()` inherits this unresolved question unchanged, since it calls `retrieve()` directly. (See `evidence/real-corpus-parity-report.md` Performance and Recommended Next Actions.)
+6. Which model client is approved for the LLM-backed `SynthesisProvider`? `docs/answer-architecture.md` specifies the seam (`SynthesisProvider.narrate()`) and `DeterministicSynthesisProvider` proves the pipeline end to end without one, but no model dependency has been approved, so `lee-kb ask` currently returns template prose, not natural-language synthesis. Same guardrail as Open Question 2 (office-format parsing dependencies), a different dependency.
+7. What would it take to measure `answer()` against the real Employee Zero corpus, the way `retrieve()` was in `evidence/real-corpus-parity-report.md`? `docs/answer-benchmark-results.md` benchmarks `answer()` only against synthetic fixture corpora (a twelve-document primary corpus plus a two-document same-authority corpus added for the S3-R-01 repair); latency, claim-assembly behavior, and conflict/absence rates at real corpus scale (~1,213 documents) are unmeasured.
 
 ## Next Actions Queue
 
-Re-ranked 2026-08-03 after S2-R-04 (nested/overlapping-root correctness),
-S2-R-03 (single-discovery-pass performance), and S1-R-16 (baseline-as-
-contract) were repaired and re-verified (see `result-review.md` and
-`evidence/real-corpus-parity-report.md`). Those three items are dropped from
-the queue below, having been completed; everything else shifts up one rank.
-Office-format dependency approval remains the top blocker, unchanged by this
-step's repairs.
+Re-ranked 2026-08-04 after the three High findings from the Sprint 3 review
+(`code-reviews/review-sprint-3-governed-answer.md`) were repaired and
+verified — see `result-review.md` and `docs/answer-benchmark-results.md`. A
+new item enters the queue for that review's two remaining Medium findings
+(S3-R-04, S3-R-05); everything carried over from Sprint 2 and the earlier
+Sprint 3 delivery is unchanged in scope. Office-format dependency approval
+remains the top blocker.
 
 | Rank | Action | Owner | Done When |
 |------|--------|-------|-----------|
 | 1 | Approve `.docx`/`.xlsx`/`.pptx` parsing libraries, register format handlers, **and** extend the `include` patterns on the affected roots (real corpus measurement: 39 files, concentrated in `ai-employee-book` and `tviq` — parity is impossible without both dependency approval and the pattern change) | Human approval + Builder | Dependencies approved and added; `FORMAT_HANDLERS` covers office formats; affected roots' `include` patterns updated; unhandled include-matched files are reported, not silently invisible; tests added |
-| 2 | Fix S1-R-14: `discover()` and `_resolve()` must share one resolved root base (correctness; distinct from the now-repaired S2-R-04 nested-root claiming logic — this is about `discover()`'s containment check using `root.path.resolve()` while `_resolve()` uses unresolved `root.path`; fix before office-format ingestion touches more root paths or any customer deployment) | Builder | A directly built `RootConfig` over a symlinked root discovers and fetches consistently; regression test added |
-| 3 | Decide whether the OR-matcher's measured ~1.521s worst case (Open Question 5) is acceptable as-is or needs a page-size cap / early-exit heuristic before corpus size grows via office-format ingestion | Human + Builder | Decision recorded in `architecture.md` or a backlog item; if a heuristic is chosen, implemented and re-measured against the real corpus |
-| 4 | Curate the real golden benchmark from Lee's recurring Chief of Staff questions, using the two ranking edge cases surfaced by the real-corpus measurement (one job-search, one knowledge-discovery query, each topically-adjacent-but-non-canonical) as concrete starting material | Human + Builder | `docs/golden-baseline.md` reports results against the curated corpus |
-| 5 | File the Agent-Orch defect: continuation runs record `launch: null`, making crashed continuations unresumable | Human + Platform | Backlog item exists in agent-orch with the OS1-contract reference |
-| 6 | Implement the Outlook/Microsoft 365 email connector | Human + Planner | Connector scoped, approved, and implemented against the `Connector` contract |
-| 7 | Resolve Open Question 1 (Employee Zero parity scope for live mission status and dossier validation) | Human + Planner | Parity scope decision recorded in `architecture.md` or `product-definition.md` |
+| 2 | Approve a model-client dependency and implement an LLM-backed `SynthesisProvider` for `lee-kb ask` (Open Question 6); `docs/answer-architecture.md`'s seam is the entire integration point, so this should touch no pipeline code | Human approval + Builder | Dependency approved; a new class implements `SynthesisProvider.narrate()`; registered via `answer(..., synthesis_provider=...)`; `synthesis_provider_id` on the resulting `Answer` identifies it; tests added |
+| 3 | Fix the two remaining Medium findings from the Sprint 3 review: S3-R-04 (`Answer` carries no withheld/truncated signal — add `withheld_count`/`truncated`, populated from the governed bundle, rendered by `cmd_ask`) and S3-R-05 (`cmd_ask` never passes `project_has_synchronized_content`/`corpus_fresh`/`resolution_failed` to `answer()`, so the CLI cannot reach the purpose-built `UNKNOWN` absence branch and reports `NOT_FOUND` instead) | Builder | `Answer` reports withheld/truncated counts; `lee-kb ask` against an unsynchronized project reports `unknown`, not `not_found`; regression tests added for both |
+| 4 | Fix S1-R-14: `discover()` and `_resolve()` must share one resolved root base (correctness; distinct from the now-repaired S2-R-04 nested-root claiming logic — this is about `discover()`'s containment check using `root.path.resolve()` while `_resolve()` uses unresolved `root.path`; fix before office-format ingestion touches more root paths or any customer deployment) | Builder | A directly built `RootConfig` over a symlinked root discovers and fetches consistently; regression test added |
+| 5 | Decide whether the OR-matcher's measured ~1.521s worst case (Open Question 5) is acceptable as-is or needs a page-size cap / early-exit heuristic before corpus size grows via office-format ingestion | Human + Builder | Decision recorded in `architecture.md` or a backlog item; if a heuristic is chosen, implemented and re-measured against the real corpus |
+| 6 | Curate the real golden benchmark from Lee's recurring Chief of Staff questions, using the two ranking edge cases surfaced by the real-corpus measurement (one job-search, one knowledge-discovery query, each topically-adjacent-but-non-canonical) as concrete starting material, and run it through both `retrieve()` and `answer()` (Open Question 7) | Human + Builder | `docs/golden-baseline.md` reports results against the curated corpus for `retrieve()`; `docs/answer-benchmark-results.md` reports results for `answer()` |
+| 7 | File the Agent-Orch defect: continuation runs record `launch: null`, making crashed continuations unresumable | Human + Platform | Backlog item exists in agent-orch with the OS1-contract reference |
+| 8 | Implement the Outlook/Microsoft 365 email connector | Human + Planner | Connector scoped, approved, and implemented against the `Connector` contract |
+| 9 | Resolve Open Question 1 (Employee Zero parity scope for live mission status and dossier validation) | Human + Planner | Parity scope decision recorded in `architecture.md` or `product-definition.md` |
 
-Also open, advisory (not ranked — lower severity, from the same review): S2-R-05 through S2-R-11 in `code-reviews/review-sprint-2-p1-real-corpus.md` (docstring/partition-accuracy fixes, two narrative-count corrections in the evidence report, a commit-message traceability gap, a stale test-count reference, a `ruff` config deprecation, and two missing regression tests).
+Also open, advisory (not ranked — lower severity): S2-R-05 through S2-R-11 in
+`code-reviews/review-sprint-2-p1-real-corpus.md` (docstring/partition-accuracy
+fixes, two narrative-count corrections in the evidence report, a
+commit-message traceability gap, a stale test-count reference, a `ruff`
+config deprecation, and two missing regression tests); and S3-R-07, S3-R-08,
+S3-R-09 in `code-reviews/review-sprint-3-governed-answer.md` (Provenance
+Examples quote reformatted claim text and undercount claims,
+`docs/answer-architecture.md` misstates the default synthesis provider as
+unconfigured, and `OUTSIDE_REQUESTED_PROJECT` omissions collapse to
+`NOT_RELEVANT` for readers). S3-R-06 (the Confidence Distribution
+double-count) was corrected in this step as a byproduct of rewriting
+`docs/answer-benchmark-results.md` and is no longer open.
 
 ## Working Conventions
 

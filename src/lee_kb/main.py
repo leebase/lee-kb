@@ -1,10 +1,13 @@
 """Command-line entry point for Lee Knowledge Base.
 
-Version 1 synchronization is explicitly user-driven (``lee-kb sync``) and
-retrieval is evidence-only: ``lee-kb search`` calls the governed
-:func:`lee_kb.governance.retrieve` surface and prints ranked evidence with
-citations, freshness, and receipt identifiers. No LLM answer synthesis
-happens in this release -- see :mod:`lee_kb.governance` for the pipeline.
+Version 1 synchronization is explicitly user-driven (``lee-kb sync``).
+``lee-kb search`` calls the governed :func:`lee_kb.governance.retrieve`
+surface directly and prints ranked evidence with citations, freshness, and
+receipt identifiers -- no synthesis. ``lee-kb ask`` layers claim assembly and
+deterministic, offline synthesis on top of the same governed surface via
+:func:`lee_kb.answer.answer`; see :mod:`lee_kb.answer` and
+``docs/answer-architecture.md`` for the pipeline. Neither command has an
+LLM dependency in this release.
 """
 
 from __future__ import annotations
@@ -20,6 +23,8 @@ from pathlib import Path
 import tomllib
 
 from . import __version__
+from .answer import answer as compute_answer
+from .answer_contracts import AbsenceKind
 from .chunking import chunk_document
 from .connectors.base import (
     ConnectorConfigError,
@@ -513,6 +518,119 @@ def cmd_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def _format_receipt_reference(result) -> str:
+    if not result.receipt_ids:
+        return "No evidence was receipted for this answer."
+    timestamp = min(receipt_id.retrieval_timestamp for receipt_id in result.receipt_ids)
+    return (
+        f"{len(result.receipt_ids)} evidence item(s) receipted "
+        f"at {timestamp.isoformat()}"
+    )
+
+
+def _print_answer(result) -> None:
+    print(f"Q: {result.question}")
+    print()
+
+    if result.is_absent:
+        absence = result.absence
+        print(f"A: [{absence.kind.value}] {absence.detail or 'No answer available.'}")
+        if absence.kind is AbsenceKind.NOT_FOUND:
+            print(f"    searched projects: {', '.join(absence.searched_projects)}")
+        elif absence.kind is AbsenceKind.INACCESSIBLE:
+            print(
+                f"    withheld: {absence.withheld_count} item(s) denied by permissions"
+            )
+        print()
+        print(f"Confidence: {result.confidence.value}")
+        print(_format_receipt_reference(result))
+        return
+
+    if result.prose:
+        print(result.prose)
+    else:
+        for index, claim in enumerate(result.claims, start=1):
+            print(f"[{index}] {claim.text}")
+    print()
+
+    print(f"Confidence: {result.confidence.value}")
+    print()
+
+    print("Citations:")
+    for index, claim in enumerate(result.claims, start=1):
+        for citation in claim.citations:
+            label = (
+                citation.title
+                or citation.source_locator.label
+                or citation.source_locator.uri
+            )
+            print(f"  [{index}] {label} — {citation.source_locator.uri}")
+
+    if result.conflicts:
+        print()
+        print("Conflicts:")
+        for conflict in result.conflicts:
+            print(f"  - {conflict.left.claim.text!r}")
+            print(f"    vs {conflict.right.claim.text!r}")
+            print(
+                f"    newer: {conflict.newer.value}; "
+                f"more authoritative: {conflict.more_authoritative.value}"
+            )
+
+    if result.evidence_omitted:
+        print()
+        print(
+            f"{len(result.evidence_omitted)} additional evidence item(s) "
+            "considered, not used."
+        )
+
+    print()
+    print(_format_receipt_reference(result))
+
+
+def cmd_ask(args: argparse.Namespace) -> int:
+    if args.top_k < 1:
+        print("lee-kb: --top-k must be at least 1", file=sys.stderr)
+        return 2
+
+    config_path = resolve_config_path(args.config)
+    raw_config: dict = {}
+    if config_path.exists():
+        try:
+            raw_config = _load_raw_config(config_path)
+        except ConnectorConfigError as error:
+            print(f"lee-kb: {error}", file=sys.stderr)
+            return 2
+
+    db_path = _resolve_database_path(config_path, raw_config, args.database)
+    if not db_path.exists():
+        print(
+            f"lee-kb: no synchronized knowledge found at {db_path}; "
+            "run `lee-kb sync` first",
+            file=sys.stderr,
+        )
+        return 1
+
+    principal_id = args.principal or raw_config.get("owner") or DEFAULT_PRINCIPAL_ID
+    principal = Principal(principal_id=principal_id)
+
+    try:
+        with SQLiteRepository(db_path) as repository:
+            result = compute_answer(
+                repository,
+                args.question,
+                principal=principal,
+                project=args.project,
+                top_k=args.top_k,
+            )
+    except MissingPrincipalError as error:
+        print(f"lee-kb: {error}", file=sys.stderr)
+        return 2
+
+    _print_answer(result)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lee-kb",
@@ -603,6 +721,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     search_parser.add_argument("--config", help=config_help)
     search_parser.set_defaults(func=cmd_search)
+
+    ask_parser = subparsers.add_parser(
+        "ask",
+        help=(
+            "Ask a question and receive a synthesized, cited answer over "
+            "governed evidence (deterministic, offline synthesis)."
+        ),
+    )
+    ask_parser.add_argument("question", help="Question text.")
+    ask_parser.add_argument(
+        "--project",
+        default=DEFAULT_PROJECT,
+        help=f"Project to search (default: {DEFAULT_PROJECT}).",
+    )
+    ask_parser.add_argument(
+        "--top-k",
+        type=int,
+        default=10,
+        dest="top_k",
+        help="Maximum evidence items to consider.",
+    )
+    ask_parser.add_argument(
+        "--principal",
+        default=None,
+        help=(
+            "Principal to ask as (default: the configured owner, "
+            "then lee@leebase.com)."
+        ),
+    )
+    ask_parser.add_argument("--config", help=config_help)
+    ask_parser.add_argument(
+        "--database",
+        help="Read the synchronized SQLite projection from this path.",
+    )
+    ask_parser.set_defaults(func=cmd_ask)
 
     return parser
 

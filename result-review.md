@@ -3,6 +3,223 @@
 > **Running log of completed work.** Newest entries are at the top. Each entry
 > records what changed, why it matters, and how to verify it.
 
+## 2026-08-04 — Repair of the three High findings from the Sprint 3 review (S3-R-01, S3-R-02, S3-R-03); full verification re-confirmed green; benchmark results re-derived
+
+### What Was Built
+
+The independent review of the governed `answer()` surface
+(`code-reviews/review-sprint-3-governed-answer.md`, verdict `fail`, three
+High findings) is repaired for the three findings it gated on:
+
+- **S3-R-01 (High, correctness/conflict detection)** — two sources of the
+  **same** declared authority that directly contradicted each other produced
+  no `Conflict` and were merged into one self-contradictory `SYNTHESIZED`
+  claim, because `_conflict_signal` (`src/lee_kb/answer_conflict.py`) only
+  fired on differing authority or explicit supersession wording.
+  `_conflict_signal` now also fires on value-word divergence between
+  same-subject statements (reusing the existing `_VALUE_WORDS` set), and
+  `_assemble_initial_claims` (`src/lee_kb/answer.py`) refuses to merge two
+  evidence items whose value words diverge, whatever their text similarity.
+  A regression fixture (`test_same_authority_value_word_contradiction_stays_as_two_claims`)
+  and a new two-document `same_authority_repository` fixture were added to
+  `tests/answers/test_answer_benchmarks.py`.
+- **S3-R-02 (High, correctness/answer quality)** — the evidenced-absence path
+  ran before evidence selection and could short-circuit the whole pipeline on
+  any unrelated sentence matching a generic absence pattern, bypassing the
+  relevance threshold entirely. `classify_absence`
+  (`src/lee_kb/answer_absence.py`) now evaluates `_explicit_absence_evidence`
+  only over already-selected evidence, requires the absence-bearing sentence
+  to clear the same question-term relevance threshold `_relevance()` applies
+  elsewhere, and requires the matched chunk to be top-ranked in the governed
+  bundle. A regression fixture
+  (`test_unresponsive_absence_shaped_sentence_does_not_replace_answer`) was
+  added.
+- **S3-R-03 (High, correctness/conflict reconciliation)** — `detect_conflicts`
+  built its evidence-to-claim map once, before reconstitution, so a later
+  conflicting pair could resolve to an already-displaced merged claim and
+  resurrect it, double-citing chunks. `detect_conflicts`
+  (`src/lee_kb/answer_conflict.py`) now updates that map transitively the
+  moment a merged claim is split, so every subsequent pair resolves to the
+  reconstituted single-evidence claims. A regression fixture
+  (`test_three_source_conflict_cites_each_chunk_in_exactly_one_claim`) was
+  added.
+
+This step additionally re-drove full verification and updated documentation
+to match the repaired behavior: `docs/answer-benchmark-results.md` now
+reports 15 collected benchmark items (three new regression fixtures across
+two families), a corrected Confidence Distribution (10 claims: 9
+`DIRECTLY_EVIDENCED` + 1 `SYNTHESIZED`, fixing the double-counted 12 from
+S3-R-06 as a byproduct of re-deriving the numbers), and a new Conflict
+Examples entry drawn from the same-authority fixture. The Recommendation
+remains **Ready after specific follow-up** — the three High findings are
+fixed, but the review's Medium findings (S3-R-04 no withholding signal on
+`Answer`; S3-R-05 `cmd_ask` cannot reach the CLI's own `UNKNOWN` absence
+branch) and Low findings (S3-R-07, S3-R-08, S3-R-09, all documentation
+accuracy) remain open, alongside the pre-existing deferrals (LLM-backed
+synthesis provider, real-corpus measurement, live filesystem verification,
+and the two inherited `retrieve()` open questions).
+
+### Why It Matters
+
+Each of the three repaired findings produced a confidently-labelled wrong
+answer that survived a green 12/12 benchmark run and a green 235-test suite
+before this step: a single claim asserting both "enabled" and "disabled"
+with no conflict shown (S3-R-01, reproduced through `lee-kb ask` in the
+review), a responsive two-source answer replaced by an unrelated sentence
+(S3-R-02), and a resurrected merged claim double-citing two chunks after
+conflict resolution (S3-R-03). All three are now bounded by their own
+permanent regression fixture, so a future change that reintroduces any of
+them fails the suite rather than passing it silently, as the review's
+Residual Risk 5 warned would otherwise happen.
+
+### How to Verify
+
+Preserved system-validator evidence for this step
+(`agent_orch.validators.command_succeeds@1`; validator rerun not permitted,
+so these are reported, not re-executed):
+
+| # | Command | Exit | Result | Tied to | Evidence hash |
+|---|---------|-----:|--------|---------|---------------|
+| 1 | `python3 -m pytest tests/` | 0 | 241 passed in 21.13s | step_01_repair_three_high_findings acceptance criterion, attempt 1 | `33d05eed716953f30f154f470e9b01551162a7d959d7df8a8108add54bddfb10` |
+| 2 | `python3 -m pytest tests/` | 0 | 241 passed in 21.47s | step_01_repair_three_high_findings acceptance criterion, attempt 2 | `53a866fcd140168c1f2584808ee375285e6ebe05b7925f7750fa2a8e66e2c4af` |
+
+Fresh in this step (not preserved evidence):
+
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` — clean,
+  `30 files would be left unchanged`, exit 0, no reformatting needed.
+- `python3 -m ruff check src tests tools` — clean, exit 0 (the same
+  pre-existing `pyproject.toml` linter-settings deprecation warning tracked
+  as S2-R-10 remains, out of this step's scope).
+- `python3 -m compileall -q src tests tools` — clean, exit 0, no output.
+- `git diff --check` — clean, exit 0, no output.
+- `python3 -m pytest tests/answers/ -v` — 15 passed in 0.59s, exit 0
+  (supplementary, not preserved evidence — used to confirm the three new
+  regression fixtures collect and pass, and to derive the per-family table in
+  `docs/answer-benchmark-results.md`).
+- `docs/answer-benchmark-results.md` — rewritten to reflect the repaired
+  behavior: updated Benchmark Cases (15 items across three expanded
+  families), corrected Confidence Distribution, a new same-authority Conflict
+  Example, and a Recommendation that states the open Medium/Low findings and
+  pre-existing deferrals plainly rather than implying full resolution.
+
+## 2026-08-04 — Sprint 3: the governed `answer()` surface and `lee-kb ask`; full verification green; benchmark results recorded
+
+### What Was Built
+
+Sprint 3 delivered a second retrieval surface, layered strictly on top of the
+already-governed `retrieve()`: `answer()` returns an `Answer` — ordered
+claims, each with its own citations and confidence, plus conflicts,
+absences, and receipt identifiers — instead of raw evidence rows. This was
+built across five prior steps in this run and this step closes it out:
+
+- `docs/answer-architecture.md` — the normative design (evidence model,
+  confidence model, conflict handling, provenance guarantees, absence
+  semantics, synthesis providers, deferred extensions).
+- `src/lee_kb/answer_contracts.py` — `Confidence`, `AbsenceKind`,
+  `OmissionReason`, `Side`, `ReceiptId`, `EvidenceRef`, `OmittedEvidence`,
+  `Claim`, `ConflictSide`, `Conflict`, `Absence`, `Answer`, and
+  `SynthesisProvider`, with construction-time invariants for citation
+  closure, receipt closure, evidence disjointness, and attributed prose.
+- `src/lee_kb/answer_evidence.py` — deterministic, source-diverse evidence
+  selection over a governed `EvidenceBundle`, with every rejected item kept
+  and reasoned (`SelectionOmissionReason`).
+- `src/lee_kb/answer_absence.py` — classifies `NOT_FOUND`, `INACCESSIBLE`,
+  and `UNKNOWN` without ever collapsing them into one state, including the
+  evidenced-absence path (a cited statement that something was never
+  created).
+- `src/lee_kb/answer_conflict.py` — pairwise conflict detection with two
+  read-only ordering signals (`newer`, `more_authoritative`) and no `winner`.
+- `src/lee_kb/answer.py` — `answer()` itself: plan (pass-through) → the
+  unmodified `retrieve()` → evidence selection → absence classification →
+  claim assembly → conflict detection → confidence assignment → optional
+  narration. `DeterministicSynthesisProvider` is the default
+  `SynthesisProvider`: an offline, standard-library-only template renderer,
+  not a model call.
+- `src/lee_kb/main.py` — the `lee-kb ask` CLI command, printing claims (or
+  deterministic prose), confidence, citations, conflicts, omitted-evidence
+  counts, and a receipt reference; fails closed on a missing/invalid
+  principal exactly like `search`.
+- `tests/answers/test_answer_benchmarks.py` — permanent, offline regression
+  fixtures for seven distinct benchmark families (cross-repository claim
+  assembly, fuzzy matching, cross-repository attribution breadth,
+  authoritative evidenced absence, conflict identification without a
+  winner, duplicate-source suppression, and end-to-end provenance/receipt
+  closure), against a synthetic eight-document corpus synced through the
+  real connector and repository.
+- `docs/answer-benchmark-results.md` (this step) — per-family pass/fail,
+  concrete provenance and conflict examples drawn from the fixtures,
+  confidence distribution, latency observations, and a
+  `Ready after specific follow-up` recommendation.
+
+This step additionally drove full verification to green.
+`BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools`, `python3 -m
+ruff check src tests tools`, `python3 -m compileall -q src tests tools`, and
+`git diff --check` were all run fresh. Two pre-existing issues, unrelated to
+the `answer()` code itself, were fixed to get there:
+`tests/test_local_connector.py` had drifted out of `black` formatting and was
+reformatted with no behavioral change; a stray `tests/._test_bootstrap_cli.py`
+file (macOS `AppleDouble` metadata, already covered by the `._*` rule in
+`.gitignore` and never tracked by git) broke `compileall` and was removed as
+local cruft. `python3 -m pytest tests/` was not rerun — validator rerun is
+not permitted for this step; see How to Verify for the preserved evidence
+this reports from.
+
+**Explicitly not implemented by this step or any prior Sprint 3 step:** the
+LLM-backed `SynthesisProvider` is specified in `docs/answer-architecture.md`
+(Synthesis Providers) but not implemented — it requires a runtime dependency
+that has not been approved, the same guardrail that gates office-format
+parsing. Live filesystem verification of `ask` over time (freshness drift,
+resync during use) remains a deferred extension: the benchmark suite runs
+against a temporary, synthetic SQLite projection, not a live corpus. The
+curated Chief-of-Staff golden benchmark still does not exist for either
+`retrieve()` or `answer()`.
+
+### Why It Matters
+
+`ask` gives a human a governed, cited *answer* instead of evidence rows to
+interpret themselves, without adding any permission logic of its own —
+every guarantee `retrieve()` already provides (fail-closed authorization,
+freshness, receipts) is inherited unchanged. The construction-time
+invariants on `Answer` (citation closure, receipt closure, disjointness,
+attributed prose) make a malformed answer impossible to build, not just
+discouraged by convention, and the absence and conflict models are
+structurally incapable of collapsing three distinct governance states
+(no evidence / withheld evidence / unresolved question) or picking a
+silent winner between two contradicting sources.
+
+### How to Verify
+
+Preserved system-validator evidence for this step
+(`agent_orch.validators.command_succeeds@1`; validator rerun not permitted,
+so these are reported, not re-executed):
+
+| # | Command | Exit | Duration (s) | Result | Tied to | Evidence hash |
+|---|---------|-----:|--------------:|--------|---------|---------------|
+| 1 | `python3 -m pytest tests/` | 0 | 14.413172 | 186 passed | step_01 (answer architecture and contracts) | `1a3d21ca90580a931d16f5468c2c1cffc53bd5c8ec55bcac4c139779711faf4d` |
+| 2 | `env PYTHONPATH=src python3 -c "from lee_kb import answer_contracts"` | 0 | 0.04469 | imports cleanly | step_01 | `8991457bea9d1925aae665efbcd33826801eff38ae39465f0056f49eafaff5ab` |
+| 3 | `python3 -m pytest tests/` | 0 | 15.37891 | 193 passed | step_02 (evidence selection and provenance) | `cf8a35c6528fad7fbac770cdf38284b78138d4c2b476a01811b79ce2367bc291` |
+| 4 | `python3 -m pytest tests/` | 0 | 16.399417 | 204 passed | step_03 (absence and conflict) | `e33a6281ac0f31f98e6a0bff873331b374a4c94e89c62f9e00055621b8be940e` |
+| 5 | `python3 -m pytest tests/` | 0 | 16.707464 | 204 passed | step_03 | `5b333f0285429175ee518be0479266a37145485e055d1a7b71fccf3cf2f9f3e8` |
+| 6 | `python3 -m pytest tests/` | 0 | 19.619283 | 223 passed | step_04 (answer assembly and CLI) | `730c832389ed31aa68aa75ff88caf4fd79066a4c80de00cd299a6b466d5ff031` |
+| 7 | `env PYTHONPATH=src python3 -m lee_kb.main ask --help` | 0 | 0.07238 | prints usage | step_04 | `d978c0437a98a3aa503c145496994d4bf3b959de742774434859fd1be2015d10` |
+| 8 | `python3 -m pytest tests/answers/` | 0 | 0.992751 | 12 passed | step_05 (regression fixtures, seven benchmark families) | `48c1a51c2f83ee304d657ec09d6b7de7529854b20e9100c68c989066c3260401` |
+| 9 | `python3 -m pytest tests/` | 0 | 19.621162 | 235 passed | step_05 | `e60b728ee811d2970d9cdc595aca93815b5a38c903188043b9d987e740792999` |
+
+Fresh in this step (not preserved evidence):
+
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` — clean
+  after reformatting `tests/test_local_connector.py`, exit 0.
+- `python3 -m ruff check src tests tools` — clean, exit 0 (the same
+  pre-existing `pyproject.toml` linter-settings deprecation warning tracked
+  as S2-R-10 remains, out of this step's scope).
+- `python3 -m compileall -q src tests tools` — clean, exit 0, after removing
+  the stray gitignored `._test_bootstrap_cli.py` file.
+- `git diff --check` — clean, exit 0.
+- `docs/answer-benchmark-results.md` — per-family results, concrete
+  provenance and conflict examples, confidence distribution, and latency
+  observations, all drawn from `tests/answers/test_answer_benchmarks.py`'s
+  synthetic fixtures (never Lee's private corpus).
+
 ## 2026-08-03 — Sprint 2 correctness and performance repairs (S2-R-04, S2-R-03, S1-R-16); full verification green
 
 ### What Was Built

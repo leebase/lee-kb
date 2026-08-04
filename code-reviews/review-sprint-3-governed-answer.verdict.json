@@ -1,0 +1,355 @@
+{
+  "schema": "review_verdict/v1",
+  "review": "code-reviews/review-sprint-3-governed-answer.md",
+  "subject": "Sprint 3 — the governed answer() surface, lee-kb ask, and the seven benchmark families",
+  "reviewed_at": "2026-08-04",
+  "step_id": "step_07_independent_review",
+  "reviewer_role": "independent reviewer (agents/reviewer.md, skills/code-review.md)",
+  "verdict": "fail",
+  "summary": "The governance skeleton is sound and every Sprint 1/2 invariant re-verified clean under the new surface by executed probe: answer() reaches the repository only through governance.retrieve() (proven by call-sequence identity and by neutralising retrieve so answer() has no fallback), the principal is fail-closed, permission filtering precedes evidence assembly, one receipt is written per released evidence item, the three absence states are produced from distinguishable inputs and a constructed inaccessible case is reported INACCESSIBLE and not NOT_FOUND, confidence is derived rather than asserted, every benchmark citation resolves to a real item and chunk, evidence_omitted is genuinely populated, no runtime dependency was added, no LLM client exists anywhere in the repository, and a repository-wide scan across the host-path, credential, corpus-content and artefact classes found no leak. Three High correctness defects sit in the layer above that skeleton — claim assembly, absence short-circuiting, and conflict reconciliation — each constructed and reproduced, one of them end to end through the shipped lee-kb ask command. All three survive a green 12/12 benchmark run and a green 235-test suite.",
+  "findings": [
+    {
+      "id": "S3-R-01",
+      "severity": "High",
+      "category": "correctness/conflict-detection",
+      "file": "src/lee_kb/answer_conflict.py",
+      "location": "src/lee_kb/answer_conflict.py:195 _conflict_signal; src/lee_kb/answer.py:414 _assemble_initial_claims",
+      "problem": "Two sources of the same declared authority that directly contradict each other produce no Conflict, and because their meaningful-term overlap clears the 0.5 similarity threshold they are merged into one SYNTHESIZED claim whose text asserts both sides. _conflict_signal fires only on differing Authority or on explicit supersession wording in the newer text; a plain contradiction between two DERIVED documents matches neither, so it returns None before comparing what the statements say. Constructed and proven (probe 3b): two DERIVED documents, 'The deployment channel for Meridian is enabled.' and '... is disabled.', with different source timestamps, yield 1 claim with confidence SYNTHESIZED whose text is '# B\\n\\nThe deployment channel for Meridian is disabled. # A\\n\\nThe deployment channel for Meridian is enabled.' and 0 conflicts. Reproduced end to end through the shipped CLI: the same two documents synced with lee-kb sync and asked with lee-kb ask against a real on-disk projection print that single self-contradictory claim under 'Confidence: synthesized', cite both files, and show no Conflicts section. This violates the invariant stated at src/lee_kb/answer.py:23-26 — 'two sources that disagree are always presented as two separate, cited claims rather than one claim asserting both'. Benchmark family 5 misses it because its Meridian fixtures are deliberately CANONICAL vs DERIVED; probe 3a confirms that shape works correctly (2 claims, 1 conflict, both sides retained, no winner).",
+      "proposed_fix": "Add a third conflict signal for value-word divergence between same-subject statements, reusing the _VALUE_WORDS set already present at answer_conflict.py:58 (enabled/disabled, required/optional, open/closed, not/never): when two same-subject statements carry diverging value words, emit a Conflict regardless of authority or timestamp. Independently, refuse to merge two evidence items in _assemble_initial_claims when their value words diverge, whatever the Jaccard similarity — the merge is the more dangerous half, since it survives even if detection is later improved. Extend benchmark family 5 with a same-authority contradiction fixture asserting one Conflict and two separate cited claims.",
+      "evidence": "probe3_conflict.py section 3b (exit 0); CLI reproduction via python3 -m lee_kb.main sync then ask (exit 0)"
+    },
+    {
+      "id": "S3-R-02",
+      "severity": "High",
+      "category": "correctness/answer-quality",
+      "file": "src/lee_kb/answer_absence.py",
+      "location": "src/lee_kb/answer_absence.py:210 classify_absence and :245 _explicit_absence_evidence; src/lee_kb/answer.py:228",
+      "problem": "The evidenced-absence path runs before evidence selection and short-circuits the entire pipeline. Its gate is one regex hit plus a single shared meaningful term with the question, evaluated over every retrieved chunk, and it bypasses select_evidence() entirely, so neither the relevance threshold nor per-source allocation applies. Any unrelated sentence matching a generic pattern ('does not exist', 'was not created') therefore replaces the real answer. Constructed and proven as a control/treatment A/B: the control corpus — two CANONICAL documents answering 'What does harbor readiness require?' — returns 2 DIRECTLY_EVIDENCED claims citing both canonical sources. Adding one unrelated DERIVED note reading 'The legacy harbor manifest does not exist.' to the identical corpus collapses the answer to exactly 1 claim, the legacy note, still labelled DIRECTLY_EVIDENCED and citing only the derived source, with both canonical documents demoted to evidence_omitted under 'Not part of the explicit statement answering this question.' The reader receives a confidently-labelled non-answer and cannot tell the correct evidence was suppressed. Probe 2e shows the same short-circuit can also erase an INACCESSIBLE signal: a withheld document plus one absence-shaped public sentence reports neither the withholding nor the real question.",
+      "proposed_fix": "Run select_evidence() first and evaluate _explicit_absence_evidence only over selected evidence, so the relevance threshold and per-source allocation both apply. Additionally require the absence-bearing sentence itself to clear the same question-term coverage test used by _relevance() at answer_evidence.py:283, rather than sharing a single token, and require the matched chunk to be top-ranked in the governed bundle. Add a regression test for 'absence-shaped sentence present but not responsive to the question' asserting the substantive claims survive.",
+      "evidence": "probe2_absence.py sections 2e and 2f, plus the separate control run over the identical corpus without the note (both exit 0)"
+    },
+    {
+      "id": "S3-R-03",
+      "severity": "High",
+      "category": "correctness/conflict-reconciliation",
+      "file": "src/lee_kb/answer.py",
+      "location": "src/lee_kb/answer.py:452 _reconcile_with_conflicts; src/lee_kb/answer_conflict.py:102 detect_conflicts",
+      "problem": "detect_conflicts builds its evidence_claims map once, before any reconstitution, so when one conflicting pair splits a merged claim, a later pair still resolves to the now-displaced merged claim. _reconcile_with_conflicts drops that merged claim from kept, but retain_conflict_sides re-appends it because a conflict still references it. Constructed and proven (probe 3c): three same-topic sources — one CANONICAL 'enabled' and two DERIVED 'disabled' — return 4 claims from 3 evidence items; the chunks for a.md and c.md are each cited by two different claims (their reconstituted direct claim and the resurrected merged claim); the resurrected SYNTHESIZED claim asserts both 'enabled' and 'disabled'; and conflict #2 pairs that self-contradictory claim against the third source, which is meaningless to a reader. This also violates detect_conflicts's own documented rule at answer_conflict.py:179, 'selected evidence may support at most one assembled claim', in the final Answer. Answer._check_provenance (answer_contracts.py:532) does not catch it because it only requires claim citations to be a subset of evidence_used, never that a chunk is cited at most once.",
+      "proposed_fix": "Make reconstitution transitive: when a merged claim is split, update evidence_claims so every subsequent pair resolves to the reconstituted single-evidence claims, and re-key any already-emitted conflict that referenced the merged claim onto those sides. Then add an invariant to Answer._check_provenance that no chunk may be cited by more than one claim, so this class of defect fails at construction rather than surfacing as duplicated prose. Add a three-source benchmark fixture asserting exactly one claim per chunk.",
+      "evidence": "probe3_conflict.py section 3c, which prints the per-chunk claim-citation count (exit 0)"
+    },
+    {
+      "id": "S3-R-04",
+      "severity": "Medium",
+      "category": "governance/honest-reporting",
+      "file": "src/lee_kb/answer.py",
+      "location": "src/lee_kb/answer.py:360 _assemble_evidenced_answer; src/lee_kb/answer_contracts.py Answer",
+      "problem": "Answer carries no equivalent of EvidenceBundle.denied_count or EvidenceBundle.truncated. Withholding is visible only through Absence.withheld_count, which exists only when the answer has no claims. Proven: with one permitted and one denied matching item, answer() returns a normal single-claim DIRECTLY_EVIDENCED answer with absence None and an empty evidence_omitted, and dataclasses.fields(Answer) contains no withheld, denied, or truncated field at all. docs/answer-architecture.md:73-76 argues the reader 'is entitled to know' what was set aside; that guarantee currently holds for relevance and redundancy but not for permission denial or top_k truncation.",
+      "proposed_fix": "Add withheld_count: int = 0 and truncated: bool = False to Answer, populated from bundle.denied_count and bundle.truncated on every assembly path — count only, no titles or locators, matching the INACCESSIBLE disclosure rule at docs/answer-architecture.md:211 — and render both in _print_answer. Add a test asserting a partially-denied result reports the withheld count.",
+      "evidence": "in-process probe over dataclasses.fields(Answer) plus a denied-item answer (exit 0)"
+    },
+    {
+      "id": "S3-R-05",
+      "severity": "Medium",
+      "category": "correctness/absence-semantics-at-the-shipped-surface",
+      "file": "src/lee_kb/main.py",
+      "location": "src/lee_kb/main.py:591 cmd_ask, call site :619",
+      "problem": "cmd_ask calls compute_answer(repository, question, principal=, project=, top_k=) and never supplies project_has_synchronized_content, corpus_fresh, or resolution_failed, so those defaults (True, None, False) are permanent for the only user-facing surface. Proven: lee-kb ask 'What is the quartz ledger?' --project never-synced against a real on-disk projection prints '[not_found] The governed corpus search returned no matching evidence. searched projects: never-synced'. classify_absence has a purpose-built branch that would report exactly this as UNKNOWN ('The requested project has no synchronized content.'), and docs/answer-architecture.md:204-206 calls reporting UNKNOWN as NOT_FOUND 'the most dangerous of the three'. The correct state is reachable through the library API and unreachable through the CLI.",
+      "proposed_fix": "In cmd_ask, look up whether the requested project has any live items and pass project_has_synchronized_content= accordingly; pass resolution_failed=True when retrieval raises a provider error rather than letting it propagate. Add a CLI test for an unsynchronized project asserting 'unknown', not 'not_found'.",
+      "evidence": "python3 -m lee_kb.main ask --project never-synced against a real synced projection (exit 0)"
+    },
+    {
+      "id": "S3-R-06",
+      "severity": "Medium",
+      "category": "documentation-accuracy",
+      "file": "docs/answer-benchmark-results.md",
+      "location": "docs/answer-benchmark-results.md:100-105, Confidence Distribution table",
+      "problem": "The table states DIRECTLY_EVIDENCED = 12 'across the five questions in family 7'. Independent reproduction — rebuilding the same eight synthetic fixtures through the real connector and repository and asking the same five questions — gives 9 DIRECTLY_EVIDENCED and 1 SYNTHESIZED, 10 claims in total, all citations resolving. The table's own 'Where' cell explains the gap: it counts the documentation-steward question's three claims twice ('documentation-steward question again via the cross-repository test (3, same claims)'). This is the same defect class as S2-R-17, repaired last sprint.",
+      "proposed_fix": "Correct the count to 9 and rewrite the 'Where' cell as 'documentation-steward (3), fuzzy-name (3), Orbital Archive absence (1), both Meridian sides (2)', stating explicitly that family 3 re-asks family 1's question and its claims are not additional.",
+      "evidence": "probe4_confidence_provenance.py section 4d (exit 0)"
+    },
+    {
+      "id": "S3-R-07",
+      "severity": "Low",
+      "category": "documentation-accuracy",
+      "file": "docs/answer-benchmark-results.md",
+      "location": "docs/answer-benchmark-results.md:71-83 Provenance Examples; src/lee_kb/answer.py:482 _direct_claim and :490 _synthesized_claim",
+      "problem": "Claim text is the raw chunk (evidence.text.strip()), so every claim begins with the source's markdown heading and keeps its hard line wraps; merged claims concatenate two whole chunks, headings included. The document says its examples are 'reproduced directly ... by calling answer() in-process', but Example 1 quotes a heading-free, re-wrapped version. Proven: the real claim text is '# Documentation Steward Naming Decision\\n\\nThe full official name is ...'. Example 1 also presents the question as producing one claim; it produces three.",
+      "proposed_fix": "Either strip the leading heading in _direct_claim (it is already carried on Citation.heading) or quote the claim verbatim in the document, and state that the example shows one of three claims.",
+      "evidence": "probe4_confidence_provenance.py sections 4d and 4e (exit 0)"
+    },
+    {
+      "id": "S3-R-08",
+      "severity": "Low",
+      "category": "documentation-accuracy",
+      "file": "docs/answer-architecture.md",
+      "location": "docs/answer-architecture.md:241",
+      "problem": "The normative design states 'v1 ships with no provider configured: answer() returns claims and citations, and prose is optional.' The delivered answer() defaults synthesis_provider to DEFAULT_SYNTHESIS_PROVIDER (answer.py:159 and :215-219), so prose is produced on every evidenced answer unless the caller passes synthesis_provider=None. The governance intent (no LLM in v1) holds; the sentence does not describe the code.",
+      "proposed_fix": "Update the sentence to: 'v1 ships with DeterministicSynthesisProvider configured by default — offline, template-rendered, LLM-free; pass synthesis_provider=None for a claims-only answer.'",
+      "evidence": "read of docs/answer-architecture.md:241 against src/lee_kb/answer.py:159 and :215-219"
+    },
+    {
+      "id": "S3-R-09",
+      "severity": "Low",
+      "category": "retrieval-quality/reporting",
+      "file": "src/lee_kb/answer_evidence.py",
+      "location": "src/lee_kb/answer_evidence.py:111 as_answer_omission",
+      "problem": "SelectionOmissionReason.OUTSIDE_REQUESTED_PROJECT is reported to the reader as OmissionReason.NOT_RELEVANT. A project-scope rejection is a governance and scoping decision, not a relevance judgement; the distinction survives only in free-text detail. The docstring acknowledges the collapse, which makes it deliberate but still lossy for a machine consumer filtering on reason.",
+      "proposed_fix": "Add an OUT_OF_SCOPE member to OmissionReason and map to it, or document in docs/answer-architecture.md that reason is a coarse public view and detail is authoritative.",
+      "evidence": "read of src/lee_kb/answer_evidence.py:111-130 against answer_contracts.OmissionReason"
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m pytest tests/",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record (step_01 contracts, criterion 1); reported, not re-executed. Recorded result: 186 passed in 13.79s."
+    },
+    {
+      "command": "env PYTHONPATH=src python3 -c \"from lee_kb import answer_contracts\"",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record (step_01 contracts, criterion 2); reported, not re-executed. The module imports cleanly with no output."
+    },
+    {
+      "command": "python3 -m pytest tests/",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record (step_02 evidence selection and provenance); reported, not re-executed. Recorded result: 193 passed in 14.75s."
+    },
+    {
+      "command": "python3 -m pytest tests/",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record (step_03 absence and conflict); reported, not re-executed. Recorded result: 204 passed in 15.79s."
+    },
+    {
+      "command": "python3 -m pytest tests/",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record (step_03 absence and conflict, second record); reported, not re-executed. Recorded result: 204 passed in 16.09s."
+    },
+    {
+      "command": "python3 -m pytest tests/",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record (step_04 assembly and CLI, criterion 1); reported, not re-executed. Recorded result: 223 passed in 19.02s."
+    },
+    {
+      "command": "env PYTHONPATH=src python3 -m lee_kb.main ask --help",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record (step_04 assembly and CLI, criterion 2); reported, not re-executed. The ask subcommand help renders and documents --database."
+    },
+    {
+      "command": "python3 -m pytest tests/answers/",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record (step_05 regression fixtures, criterion 1); reported, not re-executed. Recorded result: 12 passed in 0.40s. This is one of the two figures docs/answer-benchmark-results.md quotes, and it matches exactly."
+    },
+    {
+      "command": "python3 -m pytest tests/",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record (step_05 regression fixtures, criterion 2); reported, not re-executed. Recorded result: 235 passed in 19.46s. This is the second figure docs/answer-benchmark-results.md quotes, and it matches exactly."
+    },
+    {
+      "command": "python3 -m pytest",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record (step_06 verification, benchmark and docs, criterion 1); reported, not re-executed. Recorded result: 235 passed in 20.56s."
+    },
+    {
+      "command": "python3 -m black --check src tests tools",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record (step_06, criterion 2); reported, not re-executed. Recorded result: 30 files would be left unchanged."
+    },
+    {
+      "command": "python3 -m ruff check src tests tools",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record (step_06, criterion 3); reported, not re-executed. Clean; the recorded output also emits the known pyproject deprecation notices mapping top-level select and ignore to lint.select and lint.ignore."
+    },
+    {
+      "command": "python3 -m compileall -q src tests tools",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record (step_06, criterion 4); reported, not re-executed. No output."
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record (step_06, criterion 5); reported, not re-executed. No whitespace errors."
+    },
+    {
+      "command": "python3 probe1_exclusivity.py",
+      "exit_code": 0,
+      "summary": "Reviewer probe, executed. Governed surface exclusivity (S1-R-01) holds. A transparent recording proxy wrapped the repository during answer(): the complete call set is search (from lee_kb.retrieval) then record_receipt twice (from lee_kb.governance), identical to the sequence produced by retrieve() alone on the same inputs, and no repository call originates in any lee_kb.answer module. Neutralising answer.retrieve makes answer() raise instead of falling back, so there is no alternate evidence path. Spying LexicalRetriever.search shows its only caller during answer() is lee_kb.governance. The one repository import in the answer modules (answer.py:86) is inside if TYPE_CHECKING."
+    },
+    {
+      "command": "python3 probe2_absence.py",
+      "exit_code": 0,
+      "summary": "Reviewer probe, executed. The three absence states are produced from distinguishable inputs and do not collapse. A constructed inaccessible case (matching document owned by another principal) reports INACCESSIBLE with withheld_count 1 and UNKNOWN confidence, and is asserted NOT to be NOT_FOUND. A permitted corpus with no match reports NOT_FOUND with UNKNOWN confidence; project_has_synchronized_content=False and resolution_failed=True each report UNKNOWN with a distinct detail. Sections 2e and 2f establish finding S3-R-02."
+    },
+    {
+      "command": "python3 probe3_conflict.py",
+      "exit_code": 0,
+      "summary": "Reviewer probe, executed. For the benchmark shape (CANONICAL vs DERIVED) a detected conflict retains both sides through assembly: 2 claims, 1 conflict, both cited, no winner attribute on Conflict, more_authoritative Side.LEFT, newer Side.NEITHER. Two constructed shapes break: a same-authority contradiction (S3-R-01) and three same-topic sources (S3-R-03, with the per-chunk claim-citation count printed)."
+    },
+    {
+      "command": "python3 probe4_confidence_provenance.py",
+      "exit_code": 0,
+      "summary": "Reviewer probe, executed. Confidence is derived, not asserted: the same question over one directly-quoted chunk yields DIRECTLY_EVIDENCED and over two independent sources stating the same thing yields SYNTHESIZED, and answer()'s signature exposes no confidence parameter. Over the rebuilt benchmark corpus and its five questions: 10 claims, 0 unresolved citations (every item_id and chunk_id resolves to a real item and chunk), and receipt_ids covers exactly evidence_used union evidence_omitted for all five. evidence_omitted is genuinely populated rather than always empty — the harbor-readiness question carries two real redundant omissions with stated reasons. Benchmark Examples 1 and 2 and the Conflict Example reproduce; the confidence distribution reproduces as 9 plus 1, establishing S3-R-06."
+    },
+    {
+      "command": "python3 probe5_invariants.py",
+      "exit_code": 0,
+      "summary": "Reviewer probe, executed. Sprint 1 and 2 invariants still hold under answer(): omitted, None and bare-string principals each raise MissingPrincipalError before any repository access; a denied item's text appears in no claim and its chunk appears in neither evidence_used nor evidence_omitted; exactly one receipt per released evidence item, with the projection's retrieval_receipts table holding one row after one answer() and zero rows referencing the denied item; nested and overlapping roots claim each file exactly once; a missing required root reports healthy=False with 'missing required roots: ghost'."
+    },
+    {
+      "command": "python3 -m lee_kb.main sync --database <scratch>/cli/kb.sqlite && python3 -m lee_kb.main ask \"Is the deployment channel for Meridian enabled or disabled?\" --database <scratch>/cli/kb.sqlite",
+      "exit_code": 0,
+      "summary": "Reviewer probe, executed. End-to-end CLI reproduction of S3-R-01 against a real on-disk projection: sync reports 2 created, and ask prints one synthesized claim asserting both 'disabled' and 'enabled', citing both files, with no Conflicts section."
+    },
+    {
+      "command": "python3 -m lee_kb.main ask \"What is the quartz ledger?\" --project never-synced --database <scratch>/cli/kb.sqlite",
+      "exit_code": 0,
+      "summary": "Reviewer probe, executed. Establishes S3-R-05: the CLI prints [not_found] for a project that was never synchronized, where classify_absence has a purpose-built UNKNOWN branch that cmd_ask cannot reach."
+    },
+    {
+      "command": "python3 -c '<tomllib read of pyproject.toml>' ; python3 -c '<AST walk over every tracked *.py comparing imports against sys.stdlib_module_names>'",
+      "exit_code": 0,
+      "summary": "Reviewer probe, executed. pyproject.toml project.dependencies is the empty list; the only extra is dev = [pytest, black, ruff]; build requires setuptools and wheel. Across all 19 tracked Python files the complete non-stdlib, non-local import set is {pytest}, used by 7 test files. No runtime dependency was added."
+    },
+    {
+      "command": "git ls-files -z | xargs -0 grep -InE '<19-term LLM and model-client alternation>'",
+      "exit_code": 0,
+      "summary": "Reviewer probe, executed repository-wide over all 78 tracked files, covering the class rather than one pattern: clients and SDKs (anthropic, openai, cohere, mistralai, google.generativeai), frameworks (langchain, litellm), local runtimes (ollama, llama_cpp, transformers, huggingface, sentence_transformers), tokenizers (tiktoken), cloud model endpoints (vertexai, bedrock), HTTP clients (httpx, requests), torch, and gpt-N and claude-* model-id shapes. Zero hits in src, tests, docs or tools. Hits exist only in playbooks/*.yaml (Agent-Orch crew model selection, not product code), research/ and architecture.md prose, and code-reviews/ (this scan's own vocabulary). A separate grep over src/ for socket, urllib, http.client, subprocess, os.system, popen, eval and exec returns one hit: connectors/local_files.py:556 running git check-ignore with a fixed argv and piped stdin. No LLM client and no network capability anywhere in the product code."
+    },
+    {
+      "command": "git ls-files -z | xargs -0 grep -InE '<absolute-host-path, credential-shape, private-corpus and tracked-artefact classes>'",
+      "exit_code": 0,
+      "summary": "Reviewer probe, executed repository-wide over all 78 tracked files. Host paths: one hit outside code-reviews/, tests/test_contracts.py:62, a synthetic file:///home/lee/{synthetic-id} fixture URI; zero in any Sprint 3 delivered file. Credential shapes: three hits, all the connector's own secret tripwire and its test (research/employee-zero-kb-reference.md:44, connectors/local_files.py:158, tests/test_local_connector.py:711 and :713); no credential value. Private corpus content: 24 files reference the corpus by name only — root names and counts, no document content — and no .sqlite, .db, .lee-kb or .env artefact is tracked. A combined scan over the 15 delivered and modified Sprint 3 files finds no host path, no credential shape and no third-party e-mail; the only address is the published owner identity lee@leebase.com plus @example.com placeholders in tests. No leak found, so no disclosure finding is raised."
+    },
+    {
+      "command": "python3 tools/validate_verdict.py code-reviews/review-sprint-3-governed-answer.verdict.json",
+      "exit_code": 0,
+      "summary": "Reviewer preflight, executed against this document before finishing: OK — satisfies the review verdict gate's required shape."
+    }
+  ],
+  "lenses": {
+    "governed_surface_exclusivity": {
+      "finding_ids": [],
+      "justification": "Clean, and proven rather than asserted. probe1_exclusivity.py wrapped the repository in a transparent recording proxy: the complete set of repository calls made during answer() is search (from lee_kb.retrieval) followed by record_receipt twice (from lee_kb.governance), identical to the call sequence retrieve() produces alone on the same inputs, and no repository call originates in any lee_kb.answer module. Replacing answer.retrieve with a raising stub makes answer() raise instead of producing a result, so there is no fallback evidence path. Spying LexicalRetriever.search shows lee_kb.governance is its only caller during answer(). The single repository import in the answer modules, answer.py:86, is inside if TYPE_CHECKING and has no runtime effect. This is the S1-R-01 invariant and it holds."
+    },
+    "authorization_and_fail_closed": {
+      "finding_ids": [],
+      "justification": "Clean. probe5_invariants.py: answer() with the principal omitted, with principal=None, and with a bare string principal each raise MissingPrincipalError from governance.retrieve() before any repository access. With one permitted and one denied matching document, the denied document's text appears in no claim and its chunk appears in neither evidence_used nor evidence_omitted — it is unreachable, not merely unrendered — and zero receipts reference it in the persisted projection. answer() adds no permission logic of its own and cannot widen scope."
+    },
+    "provenance_and_receipts": {
+      "finding_ids": [],
+      "justification": "Clean. probe4_confidence_provenance.py resolved every citation from every claim across the five benchmark questions against the repository: 10 claims, 0 unresolved citations, every item_id and chunk_id resolving to a real knowledge item and a real chunk. receipt_ids covers exactly the union of evidence_used and evidence_omitted for all five questions. evidence_omitted is genuinely populated rather than always empty: the harbor-readiness question carries two real redundant-same-source omissions with stated reasons, and probe 2f produced two more with a different reason. probe5_invariants.py confirms one receipt per released evidence item and that receipts are persisted to the retrieval_receipts table, not merely returned."
+    },
+    "absence_states": {
+      "finding_ids": ["S3-R-02"],
+      "justification": "The three states themselves are distinguishable and cannot collapse: probe2_absence.py constructs an inaccessible case (matching document owned by another principal) and asserts it reports INACCESSIBLE with withheld_count 1, not NOT_FOUND; a permitted corpus with no match reports NOT_FOUND; project_has_synchronized_content=False and resolution_failed=True each report UNKNOWN, each with a distinct detail. The defect is elsewhere: the evidenced-absence path short-circuits the pipeline before evidence selection and lets an off-topic absence-shaped sentence replace a correct answer, shown as a control/treatment A/B over an otherwise identical corpus."
+    },
+    "conflict_handling": {
+      "finding_ids": ["S3-R-01", "S3-R-03"],
+      "justification": "For the benchmark shape a detected conflict retains both sides through assembly and no path drops the losing side: probe3_conflict.py section 3a returns 2 claims, 1 conflict, both sides cited, no winner attribute on Conflict, more_authoritative Side.LEFT and newer Side.NEITHER. Two constructed shapes break the invariant instead: a same-authority contradiction is merged into one claim asserting both sides with zero conflicts (S3-R-01, also reproduced through lee-kb ask), and a three-source topic resurrects a displaced merged claim so two chunks are each cited by two claims (S3-R-03)."
+    },
+    "confidence_model": {
+      "finding_ids": [],
+      "justification": "Clean and proven derived. probe4_confidence_provenance.py asks the same question over two corpora: one directly-quoted chunk yields Confidence.DIRECTLY_EVIDENCED, while two independent sources stating the same thing yield Confidence.SYNTHESIZED — different evidence shape, different confidence, identical caller. answer()'s signature contains no confidence parameter, so a caller cannot assert one, and overall confidence is computed by weakest_confidence over the final claims."
+    },
+    "benchmark_reproducibility": {
+      "finding_ids": ["S3-R-06", "S3-R-07"],
+      "justification": "Reproduced independently by rebuilding the eight synthetic fixtures through the real connector and repository. Provenance Example 2 and the Meridian Conflict Example reproduce exactly, including newer Side.NEITHER, more_authoritative Side.LEFT, and the structural absence of a winner field. Example 1 reproduces in substance but not verbatim (S3-R-07). The Confidence Distribution table does not reproduce: 9 DIRECTLY_EVIDENCED observed against 12 claimed (S3-R-06). The document's recommendation, 'Ready after specific follow-up', is a permitted value. Its two quoted pytest figures match preserved validator records 8 and 9 exactly."
+    },
+    "dependency_and_llm_boundary": {
+      "finding_ids": [],
+      "justification": "Clean. pyproject.toml project.dependencies is the empty list. An AST walk over every tracked Python file, comparing each top-level import against sys.stdlib_module_names, finds exactly one non-stdlib, non-local import in the whole repository: pytest, a declared dev extra. A repository-wide grep over all 78 tracked files for a 19-term alternation covering LLM clients, SDKs, frameworks, local runtimes, tokenizers, cloud model endpoints, HTTP clients and model-id shapes returns zero hits in product code. No runtime dependency was added and no LLM client is imported anywhere."
+    },
+    "disclosure_and_secrets": {
+      "finding_ids": [],
+      "justification": "Clean, scanned repository-wide across the class rather than one pattern. Absolute host paths: one hit outside code-reviews/, a synthetic file:///home/lee/{synthetic-id} fixture URI in tests/test_contracts.py:62; zero in any Sprint 3 delivered file. Credential shapes: three hits, all the local-file connector's own secret tripwire and the test exercising it; no credential value. Private corpus content: the corpus is referenced only by root name and document counts in project memory and prior reviews, never by content, and no .sqlite, .db, .lee-kb or .env artefact is tracked. A combined scan over the 15 delivered and modified Sprint 3 files finds no host path, no credential shape and no third-party e-mail; the only address is the published owner identity lee@leebase.com and @example.com test placeholders. No leak found, so no High disclosure finding is raised."
+    },
+    "sprint_1_and_2_invariants": {
+      "finding_ids": [],
+      "justification": "All re-verified under the new surface by probe5_invariants.py: fail-closed principal, permission filtering before evidence assembly, one receipt per released evidence item (persisted, and none for denied items), governed surface exclusivity (probe 1), nested and overlapping root claiming with each file claimed by exactly one root, and health-gated sync refusing an unreachable required root. No Sprint 1 or Sprint 2 invariant regressed."
+    },
+    "tests_and_documentation": {
+      "finding_ids": ["S3-R-05", "S3-R-06", "S3-R-07", "S3-R-08", "S3-R-09"],
+      "justification": "The seven benchmark families are well constructed for the behaviors they target and all 12 items pass, but all three High findings survive them: conflict coverage is a single cross-authority pair, and the absence family uses a corpus where the absence-shaped sentence is itself the correct answer. Five specific fixtures are recommended in the review. Documentation drift is confined to the confidence-distribution count, the verbatim example text, and the default-provider sentence in the architecture document."
+    }
+  },
+  "readiness": {
+    "criteria": [
+      {
+        "id": "R-01",
+        "criterion": "The delivered answer() surface returns correct, non-misleading answers for ordinary corpus shapes.",
+        "status": "verified_false",
+        "basis": "Three High findings, each constructed and reproduced by an executed probe, produce a confidently-labelled wrong answer: S3-R-01 (a single claim asserting both 'enabled' and 'disabled', reproduced through lee-kb ask against a real projection), S3-R-02 (an unrelated absence-shaped sentence replacing the correct answer, shown as a control/treatment A/B over an otherwise identical corpus), and S3-R-03 (a resurrected merged claim double-citing two chunks)."
+      },
+      {
+        "id": "R-02",
+        "criterion": "The governed surface exclusivity invariant (S1-R-01) holds: no answer path reaches retrieval, the repository, or the index directly.",
+        "status": "verified_true",
+        "basis": "probe1_exclusivity.py — repository call-sequence identity with retrieve(), no repository call originating in any answer module, no fallback path when retrieve is neutralised, and lee_kb.governance as the sole caller of LexicalRetriever.search."
+      },
+      {
+        "id": "R-03",
+        "criterion": "Sprint 1 and Sprint 2 governance invariants still hold under the new surface.",
+        "status": "verified_true",
+        "basis": "probe5_invariants.py — fail-closed principal across three forms, permission filtering before evidence assembly with denied content unreachable, one persisted receipt per released evidence item and none for denied items, nested-root claiming with each file claimed exactly once, and health-gated sync refusing an unreachable required root."
+      },
+      {
+        "id": "R-04",
+        "criterion": "No runtime dependency was added and no LLM client is imported anywhere in the repository.",
+        "status": "verified_true",
+        "basis": "pyproject.toml project.dependencies is empty; an AST walk over every tracked Python file finds pytest as the only non-stdlib, non-local import; a 19-term repository-wide scan over all 78 tracked files finds no LLM client, SDK, local runtime, tokenizer, cloud model endpoint or HTTP client in product code."
+      },
+      {
+        "id": "R-05",
+        "criterion": "No absolute host path, private corpus content, or credential-shaped detail appears in any tracked file.",
+        "status": "verified_true",
+        "basis": "Repository-wide scans across four distinct classes over all 78 tracked files. Every hit is a synthetic fixture, the connector's own secret tripwire, the scan vocabulary itself, or the published owner identity. Zero host paths, credentials or corpus content in any Sprint 3 delivered file."
+      },
+      {
+        "id": "R-06",
+        "criterion": "Every substantive claim carries a citation resolving to a real knowledge item, evidence_omitted is genuinely populated, and receipts close over released evidence.",
+        "status": "verified_true",
+        "basis": "probe4_confidence_provenance.py — 10 claims across five benchmark questions with 0 unresolved citations, receipt_ids covering exactly evidence_used union evidence_omitted for all five, and non-empty evidence_omitted carrying real reasons on the questions where selection actually rejected evidence."
+      },
+      {
+        "id": "R-07",
+        "criterion": "The benchmark document's claimed results are reproducible from the fixture suite.",
+        "status": "verified_false",
+        "basis": "Two of three spot-checks reproduce exactly (Provenance Example 2, and the Meridian Conflict Example including newer, more_authoritative and the structural absence of a winner), and the two quoted pytest figures match preserved validator records 8 and 9 exactly. The Confidence Distribution table does not reproduce (9 observed against 12 claimed, S3-R-06) and Example 1's quoted claim text is not verbatim (S3-R-07). The recommendation value is permitted."
+      },
+      {
+        "id": "R-08",
+        "criterion": "Producer steps executed the route they declared, against the declared repository identity, under the declared validator authority policy.",
+        "status": "verified_true",
+        "basis": "The packet supplies route_selection and route_execution attestations for 8 finished attempts, repository_identity comparisons for 8, and 14 independently executed system-validator records. Every producer step whose output is in the delivered tree carries producer_route_executed, repository_identity_verified and validator_authority_verified as verified_true for its accepted invocation. Two scoped records read verified_false and are recorded rather than smoothed over: validator_authority_verified for step_03 attempt-1, superseded by attempt-2 (verified_true), and validator_authority_verified for step_07 attempt-1, the rejected prior review attempt, which produced no delivered source. Each record is read only within its own subject, phase, step and invocation scope."
+      },
+      {
+        "id": "R-09",
+        "criterion": "The evidence chain was intact when this evaluator was invoked.",
+        "status": "verified_true",
+        "basis": "The packet declares an evidence_chain snapshot verified before evaluator invocation with ok=true. Scope noted as declared: this is not the approval-boundary or terminal attestation, and this review does not certify those. Platform-owned post-execution attestations for this step are produced after it returns and are not certified here."
+      },
+      {
+        "id": "R-10",
+        "criterion": "An independent semantic judge confirmed the delivered work satisfies the playbook's semantic rules.",
+        "status": "not_evidenced",
+        "required_evidence": ["semantic_judge_execution"],
+        "basis": "The packet declares semantic_judge_execution as not available for this step because this playbook declares no semantic_check rule. No semantic-judge record reached this review, so no judgement about semantic conformance is recorded either way."
+      },
+      {
+        "id": "R-11",
+        "criterion": "answer() behavior is characterised against a real corpus and a live, continuously-synchronized filesystem.",
+        "status": "verified_false",
+        "basis": "Every result available to this review — the delivered suite, the benchmark document, and this review's own probes — comes from synthetic corpora projected into temporary SQLite. docs/answer-benchmark-results.md states this deferral plainly and context.md Open Question 7 records it. The three High findings are corpus-shape sensitive, so their real-corpus incidence is unmeasured."
+      }
+    ],
+    "recommendation": "Ready after specific follow-up",
+    "recommendation_basis": "The governance skeleton is sound and survived every attack this review made on it: exclusivity, fail-closed authorization, permission filtering before assembly, receipt closure, absence-state distinguishability, derived confidence, the dependency boundary and the disclosure boundary all verified true by executed probe. The three blocking defects are bounded, well understood, each has a concrete proposed fix and a named regression fixture, and none requires design rework. Gate re-arming on S3-R-01, S3-R-02 and S3-R-03 landing together with their fixtures, then re-running the benchmark suite. The slice should not be released to a reader as it stands."
+  },
+  "residual_risks": [
+    "The LLM-backed SynthesisProvider is unimplemented, pending dependency approval. answer() ships with only DeterministicSynthesisProvider, a standard-library template renderer with no model call; an LLM-backed provider needs a runtime model-client dependency that is not approved under AGENTS.md's 'Add external runtime dependencies' guardrail (context.md Open Question 6). Verified, not assumed: dependencies are empty, pytest is the only third-party import in the repository, and a 19-term repository-wide scan finds no LLM client in product code.",
+    "Live filesystem verification is deferred. Every result — the delivered suite, the benchmark document, and this review's own probes — comes from temporary synthetic projections. Nothing exercises answer() against a live, continuously-synchronized filesystem corpus over time (freshness drift, resync during use, tombstoning mid-question, concurrent sync); that verification path does not exist yet.",
+    "answer() has never been run against the real corpus. retrieve() has a ~1,213-document baseline in evidence/real-corpus-parity-report.md; answer() has only the eight-document synthetic fixture set, so claim-assembly behavior, conflict and absence rates, and latency at real scale are unknown. The three High findings are corpus-shape sensitive and their real-corpus incidence is likely higher than in the suite.",
+    "Two Sprint 1 and 2 open questions are inherited unchanged: the OR-matcher worst-case retrieval latency (~1.521s, Open Question 5) and permission-basis on receipts (Open Question 2), both of which apply to answer() because it calls retrieve() directly.",
+    "The benchmark corpus cannot catch the defects it was written beside: all three High findings survive a green 12/12 benchmark run and a green 235-test suite. Repairs should land with fixtures, or the next regression will pass in the same way."
+  ]
+}

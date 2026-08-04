@@ -59,7 +59,7 @@ def make_item_id(source_object_id: str = "notes/decisions.md") -> KnowledgeItemI
 def make_locator(item_id: KnowledgeItemId) -> SourceLocator:
     return SourceLocator(
         connector_id=item_id.connector_id,
-        uri=f"file:///home/lee/{item_id.source_object_id}",
+        uri=f"file:///synthetic/{item_id.source_object_id}",
         label=item_id.source_object_id,
     )
 

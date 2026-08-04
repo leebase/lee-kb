@@ -1,13 +1,80 @@
 # Lee Knowledge Base Sprint Plan
 
-> **Sprint 2 — Real-Corpus Parity & Post-Parity Repairs** (active)
+> **Sprint 3 — Governed `answer()` Surface** (delivered)
 >
-> Goal: measure the Sprint 1 delivery against Lee's real deployed
-> `ai-employee-factory/knowledge/sources.toml` corpus, then repair whatever
-> that measurement and its independent review surfaced.
+> Goal: layer a governed, cited *answer* surface (claims, confidence,
+> conflicts, absences) on top of the already-governed `retrieve()`, with no
+> new permission logic and no LLM dependency in this release.
 >
-> Sprint 1 — Personal Foundation is delivered; its record is preserved below,
-> unchanged, under "Sprint 1 (Delivered)".
+> Sprint 2 — Real-Corpus Parity & Post-Parity Repairs remains in progress on
+> its own open items (office-format approval, the OR-matcher decision, the
+> curated golden benchmark); its record is preserved below, unchanged, under
+> "Sprint 2". Sprint 1 — Personal Foundation is delivered; its record is
+> preserved below, unchanged, under "Sprint 1 (Delivered)".
+
+## Sprint 3 — Governed `answer()` Surface
+
+### Sprint 3 status
+
+| Field | Value |
+|-------|-------|
+| **Status** | 🟢 Delivered — contracts, evidence selection, absence/conflict identification, `answer()` assembly, the `lee-kb ask` CLI, permanent regression fixtures for seven benchmark families, and full verification are all complete; the LLM-backed synthesis provider and live filesystem verification of `ask` are explicit deferrals |
+| **Start** | 2026-08-04 |
+| **Primary owner** | Human + Builder agents (mixed crew: opus, codex, sonnet across steps) |
+
+### Sprint 3 scope
+
+#### In scope
+
+- Define the `answer()` contracts: `Confidence`, `AbsenceKind`, `OmissionReason`, `Side`, `ReceiptId`, `EvidenceRef`, `OmittedEvidence`, `Claim`, `ConflictSide`, `Conflict`, `Absence`, `Answer`, `SynthesisProvider` (`src/lee_kb/answer_contracts.py`, `docs/answer-architecture.md`).
+- Deterministic, source-diverse evidence selection over a governed `EvidenceBundle`, with every rejected item retained and reasoned (`src/lee_kb/answer_evidence.py`).
+- Authoritative absence classification (`NOT_FOUND` / `INACCESSIBLE` / `UNKNOWN`) that never collapses the three states, including a cited evidenced-absence path (`src/lee_kb/answer_absence.py`).
+- Pairwise conflict identification with `newer`/`more_authoritative` signals and no `winner` field (`src/lee_kb/answer_conflict.py`).
+- `answer()` itself: plan (pass-through) → the unmodified `retrieve()` → selection → absence classification → claim assembly → conflict detection → confidence assignment → optional narration (`src/lee_kb/answer.py`).
+- `DeterministicSynthesisProvider`: an offline, standard-library-only template renderer as the default `SynthesisProvider` — no LLM call.
+- The `lee-kb ask` CLI command, fail-closed exactly like `search` (`src/lee_kb/main.py`).
+- Permanent, offline regression fixtures for seven benchmark families against a synthetic corpus synced through the real connector and repository (`tests/answers/test_answer_benchmarks.py`).
+- Full verification and a benchmark-results report (`docs/answer-benchmark-results.md`).
+
+#### Out of scope (tracked, not abandoned)
+
+- An LLM-backed `SynthesisProvider` implementation — blocked on the same runtime-dependency approval guardrail that gates office-format parsing. `SynthesisProvider` is the entire integration seam; adding one later touches no pipeline code.
+- Live filesystem verification of `ask` over time (freshness drift, resync during use) — the benchmark suite runs against a temporary, synthetic SQLite projection, not a live corpus.
+- Measuring `answer()` against the real Employee Zero corpus, the way `retrieve()` was in `evidence/real-corpus-parity-report.md`.
+- The curated Chief-of-Staff golden benchmark for `answer()` — still does not exist, same as for `retrieve()`.
+- Permission basis on receipts (Sprint 1 Open Question 2) and real query planning (`docs/answer-architecture.md`, Deferred Extensions) — neither changes `Answer`'s shape when added later.
+
+### Sprint 3 tasks
+
+| ID | Task | Owner | Status | Done when |
+|----|------|-------|--------|-----------|
+| S3-01 | Answer architecture and contracts | Builder (opus) | ✅ Complete | `docs/answer-architecture.md` and `src/lee_kb/answer_contracts.py`; `tests/test_answer_contracts.py` verifies construction-time invariants; `python3 -m pytest tests/` and `env PYTHONPATH=src python3 -c "from lee_kb import answer_contracts"` both exit 0 |
+| S3-02 | Evidence selection and provenance | Builder (codex) | ✅ Complete | `src/lee_kb/answer_evidence.py`; `tests/test_answer_evidence.py`; `python3 -m pytest tests/` exit 0 |
+| S3-03 | Authoritative absence and conflict identification | Builder (codex) | ✅ Complete | `src/lee_kb/answer_absence.py` and `src/lee_kb/answer_conflict.py`; `tests/test_answer_absence.py` and `tests/test_answer_conflict.py`; `python3 -m pytest tests/` exit 0 |
+| S3-04 | `answer()` assembly, deterministic synthesis provider, and the `lee-kb ask` CLI | Builder (sonnet) | ✅ Complete | `src/lee_kb/answer.py`, `DeterministicSynthesisProvider`, and `cmd_ask` in `src/lee_kb/main.py`; `tests/test_answer.py`; `python3 -m pytest tests/` and `env PYTHONPATH=src python3 -m lee_kb.main ask --help` both exit 0 |
+| S3-05 | Permanent regression fixtures for the seven benchmark families | Builder (codex) | ✅ Complete | `tests/answers/test_answer_benchmarks.py`; `python3 -m pytest tests/answers/` (12 passed) and `python3 -m pytest tests/` both exit 0 |
+| S3-06 | Full verification, benchmark results, and project memory | Builder (sonnet) | ✅ Complete | This step: `black --check`, `ruff check`, `compileall`, and `git diff --check` all clean over `src tests tools`; `docs/answer-benchmark-results.md` reports per-family results, provenance/conflict examples, confidence distribution, and latency, with a `Ready after specific follow-up` recommendation; `context.md`, `WHERE_AM_I.md`, `README.md`, and this file updated |
+
+### Sprint 3 verification
+
+- `python3 -m pytest tests/` — preserved system-validator evidence across S3-01 through S3-06 (six independent runs, all exit 0, most recent: 235 passed in 19.46s). Not rerun by S3-06 (validator rerun not permitted for that step); see `result-review.md` for the exact records.
+- `python3 -m pytest tests/answers/` — preserved system-validator evidence tied to S3-05 (12 passed in 0.40s, exit 0).
+- `env PYTHONPATH=src python3 -c "from lee_kb import answer_contracts"` and `env PYTHONPATH=src python3 -m lee_kb.main ask --help` — preserved system-validator evidence tied to S3-01 and S3-04 respectively, both exit 0.
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools`, `python3 -m ruff check src tests tools`, `python3 -m compileall -q src tests tools`, and `git diff --check` — run fresh in S3-06, all clean after fixing two pre-existing, unrelated issues (a `black`-formatting drift in `tests/test_local_connector.py` and a stray gitignored macOS metadata file that broke `compileall`).
+
+### Sprint 3 definition of done
+
+- [x] `answer()` contracts are defined with construction-time provenance, disjointness, and absence invariants.
+- [x] Evidence selection is deterministic, source-diverse, and accounts for every rejection.
+- [x] Absence classification never collapses `NOT_FOUND` / `INACCESSIBLE` / `UNKNOWN`.
+- [x] Conflict identification reports both sides with no winner.
+- [x] `answer()` adds no permission logic of its own and calls the unmodified `retrieve()`.
+- [x] `lee-kb ask` is implemented, fail-closed, and documented in `README.md`.
+- [x] Permanent regression fixtures cover seven distinct benchmark families against a real connector/repository sync.
+- [x] Full verification (`pytest`, `black --check`, `ruff check`, `compileall`, `git diff --check`) is green.
+- [x] Benchmark results are recorded in `docs/answer-benchmark-results.md`, including a plain statement that the LLM-backed synthesis provider is specified but unimplemented (pending dependency approval) and that live filesystem verification of `ask` remains a deferred extension.
+
+---
 
 ## Sprint 2 — Real-Corpus Parity & Post-Parity Repairs
 
