@@ -106,6 +106,7 @@ This format is compatible with the existing Employee Zero
 ```bash
 lee-kb sync                        # every configured root
 lee-kb sync local_files notes      # just the "notes" root
+lee-kb sync --config /path/to/sources.toml --workspace-root /path/to/workspace --database /path/to/projection.sqlite
 ```
 
 Sync discovers new and changed files by content hash (not mtime), fetches and
@@ -115,6 +116,19 @@ source changes reports everything as unchanged and creates no duplicate rows;
 a changed file replaces its projection and journals the previous content
 hash; a removed file is tombstoned, not hard-deleted, and excluded from
 ordinary search.
+
+`sync` accepts two additional overrides not exposed on `search`:
+
+- `--workspace-root` resolves relative source-root paths against a given
+  directory, overriding `workspace_root` in the config. This is what let a
+  deployed `sources.toml` (whose roots are relative to its own workspace) be
+  synchronized without rewriting the config.
+- `--database` writes the synchronized SQLite projection to a specific path
+  instead of the configured default, so a given config can be synced into an
+  alternate or scratch database.
+
+`search` has no `--database` flag; point it at a projection by setting
+`database` in the config file passed via `--config`.
 
 ### 3. Search
 

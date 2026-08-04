@@ -10,7 +10,7 @@
 | **Project** | Lee Knowledge Base (`lee-kb`) |
 | **Profile** | Python package / governed retrieval service |
 | **Current Phase** | Phase 1 — Sprint 1 Personal Foundation delivered |
-| **Overall Status** | 🟢 First governed retrieval path (local files → SQLite → lexical evidence) delivered; office formats and the curated golden benchmark remain deferred |
+| **Overall Status** | 🟢 First governed retrieval path (local files → SQLite → lexical evidence) delivered and now measured against the real deployed Employee Zero corpus (15 roots, 1,213 documents); office formats and the curated golden benchmark remain deferred |
 | **Last Updated** | 2026-08-03 |
 
 ## Progress Against Product Goals
@@ -23,7 +23,7 @@ Reference: `product-definition.md` and `architecture.md`.
 |-----------|--------|-------|
 | Personal deployment shape is defined | ✅ Done | SQLite, single user, local-first |
 | Connector contract is implemented | ✅ Done | `Connector` ABC (`src/lee_kb/connectors/base.py`) covers discovery, changes, fetch, permissions, relationships, refresh, health, and checkpointing; local-file connector implements it. Office-format file types are enumerated but not yet registered (deferred, see below) |
-| Local documents synchronize into normalized knowledge | ✅ Done | `lee-kb sync`; verified by `tests/test_local_connector.py` and a manual end-to-end run |
+| Local documents synchronize into normalized knowledge | ✅ Done | `lee-kb sync`; verified by `tests/test_local_connector.py`, a manual end-to-end run, and a full clean sync of the real deployed corpus (15 roots, 1,213 items, 12,699 chunks; see `evidence/real-corpus-parity-report.md`) |
 | SQLite repository persists items, chunks, metadata, and sync state | ✅ Done | `src/lee_kb/repository.py`, transactional, with a schema version and an append-only journal; verified by `tests/test_repository.py` |
 | Lexical retrieval returns ranked evidence | ✅ Done | BM25-based retrieval in `src/lee_kb/retrieval.py`; verified by `tests/test_retrieval.py` |
 | Results cite original sources | ✅ Done | Every `Evidence` carries a `Citation` with source locator; verified by `tests/test_retrieval.py` and `tests/test_cli.py` |
@@ -33,6 +33,12 @@ Reference: `product-definition.md` and `architecture.md`.
 Office-format parsing (`.docx`, `.xlsx`, `.pptx`) and the curated Chief-of-Staff
 golden benchmark are explicitly out of this delivery — see
 `sprint-plan.md` ("Sprint closure requirements") and `docs/golden-baseline.md`.
+Format handlers for office documents remain entirely unregistered pending
+dependency approval; the real-corpus measurement in
+`evidence/real-corpus-parity-report.md` now sizes the gap at 39 files (32
+`.docx`, 5 `.xlsx`, 2 `.pptx`) inside the 15 deployed root paths, none of
+which the connector's own sync summary can see today because every root's
+`include` patterns are markdown-only.
 
 ### Current phase goals
 
@@ -58,6 +64,7 @@ golden benchmark are explicitly out of this delivery — see
 | Connector APIs differ in change tracking and freshness | Sync correctness may vary by source | 🟡 Open | Local-file connector uses content-hash snapshot diffing; the email connector (next) will validate the contract against a source with a native change feed |
 | Provider abstractions could become over-designed | Slows first useful release | 🟢 Resolved for v1 | SQLite repository and lexical retriever implemented behind the smallest useful `Repository`/retriever interfaces |
 | Research patterns may imply enterprise scale too early | Scope drift | 🟢 Controlled | Sprint 1 stayed scoped to personal deployment, local documents, SQLite, and lexical search; office formats and semantic retrieval were deliberately deferred rather than pulled forward |
+| OR-matcher fetch-to-exhaustion could degrade further as corpus size grows | Slow retrieval on common-word queries | 🟡 Open | Measured at ~1.521s worst case on the real ~1,213-document corpus (`evidence/real-corpus-parity-report.md`); not yet measured at larger corpus size (e.g. after office-format ingestion); a page-size cap or early-exit heuristic is an open decision, not yet built |
 
 ## Key Decisions
 
@@ -67,6 +74,7 @@ golden benchmark are explicitly out of this delivery — see
 | First release is personal and SQLite-backed | Enables fast validation without enterprise infrastructure | 2026-08-03 |
 | Retrieval and execution governance are separate | Evidence access must not grant permission to act | 2026-08-03 |
 | Lexical search is the first retrieval provider | Provides a deterministic baseline before semantic complexity | 2026-08-03 |
+| Real-corpus measurement precedes further optimization | Employee Zero corpus sync/search findings (`evidence/real-corpus-parity-report.md`) now drive Next Actions Queue priority instead of assumption | 2026-08-03 |
 
 ## What “Done” Looks Like
 

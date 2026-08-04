@@ -25,10 +25,19 @@ Sprint 1 delivered one governed retrieval path: local documents on disk
 synchronize into a normalized SQLite projection and are searchable through
 lexical retrieval, with permission filtering, citations, freshness, and
 retrieval receipts on every result. Full verification (`pytest`, `black
---check`, `ruff check`) is green and `README.md`, `sprint-plan.md`, and
-`WHERE_AM_I.md` reflect the delivered behavior. The next work stream is
-choosing between curating the real golden benchmark, approving office-format
-dependencies, and starting the email connector (see Next Actions Queue).
+--check`, `ruff check`) is green. Following delivery, lee-kb was synchronized
+and queried against the real deployed
+`ai-employee-factory/knowledge/sources.toml` corpus (15 roots, ~1,200
+documents) for the first time (see
+`evidence/real-corpus-parity-report.md`), resolving Open Question 4. That
+measurement sized the office-format gap precisely (39 files: 32 `.docx`, 5
+`.xlsx`, 2 `.pptx`, invisible to the connector's own sync summary because
+every root's deployed `include` patterns are markdown-only) and produced a
+first real-corpus performance and retrieval-quality baseline. The Next
+Actions Queue below is re-ranked in light of those findings; the highest
+priority is now approving office-format parsing dependencies together with
+extending the affected roots' `include` patterns, since the real corpus
+proved both are required and neither alone closes the gap.
 
 ### Recently Completed
 
@@ -47,6 +56,8 @@ dependencies, and starting the email connector (see Next Actions Queue).
 - ✅ S1-06: Golden evaluation harness (`tests/golden/`, `docs/golden-baseline.md`) runs a 20-question generated corpus plus 3 negative controls and records a lexical baseline over paraphrase questions (60.0% hit-at-1, 100% hit-at-10, 0.766 MRR; re-recorded after S1-R-11). Proves the harness, not the curated Chief-of-Staff benchmark.
 - ✅ Independent review PASSED (verdict gate clean): three High findings (S1-R-01 ungoverned retrieve, S1-R-10 connector containment/resilience, S1-R-11 AND-matcher baseline inflation) were found, repaired, and re-verified across three review cycles; 11 advisory findings (5 Medium, 6 Low) remain in `code-reviews/review-sprint-1-personal-foundation.md` as follow-on candidates.
 - ✅ S1-07: `lee-kb init`/`sync`/`search` CLI (`src/lee_kb/main.py`) implemented and exercised end to end; full test suite (109 tests, including the golden corpus) passes; `black --check` and `ruff check` pass on `src` and `tests`.
+- ✅ Real-corpus parity measurement: `lee-kb sync`/`search` run against the actual deployed `ai-employee-factory/knowledge/sources.toml` (15 roots, ~1,200 documents) for the first time, resolving Open Question 4. Findings recorded in `evidence/real-corpus-parity-report.md`: 1,213 live items / 12,699 chunks synced cleanly (zero fetch failures, all 13 canonical overrides took effect correctly); the office-format gap is real and now sized at 39 files (32 `.docx`, 5 `.xlsx`, 2 `.pptx`), invisible to the sync summary because every root's `include` patterns are markdown-only; OR-matcher worst case measured at ~1.521s on this corpus size; 8/10 category queries returned the correct top citation, 2 returned a topically-adjacent but non-canonical document (a BM25 ranking limitation, not a discovery defect); sync baseline recorded at 5:20.37 wall-clock, ~4.48 GiB peak RSS. Office-format handlers remain unregistered pending dependency approval — no change to that deferral.
+- ✅ This step: full verification re-confirmed green (`black --check` and `ruff check` run clean with no fixes needed; `pytest tests/` and `sync --help` reconfirmed via preserved validator evidence from this run, not rerun). `README.md` updated to document the previously-undocumented `--workspace-root` and `--database` flags on `lee-kb sync`.
 
 ### In Progress
 
@@ -103,6 +114,7 @@ dependencies, and starting the email connector (see Next Actions Queue).
 | `project-plan.md` | Long-term phases and metrics | ✅ Aligned |
 | `docs/sprint-1-contracts.md` | Field-by-field domain contract specification | ✅ Available |
 | `docs/golden-baseline.md` | Golden evaluation corpus method and recorded lexical baseline | ✅ Available |
+| `evidence/real-corpus-parity-report.md` | Measured findings from syncing/querying the real deployed Employee Zero corpus | ✅ Available |
 
 ### Session memory
 
@@ -125,27 +137,30 @@ dependencies, and starting the email connector (see Next Actions Queue).
 ## Open Questions
 
 1. Which Employee Zero workflow capabilities are in lee-kb's parity scope? KB freshness check, rebuild, FAQ loading, and search clearly are; live mission status and dossier validation may belong to consumers or a future Agent-Orch connector rather than the retrieval platform.
-2. Which parsing libraries are approved for .docx/.xlsx/.pptx? (Office formats require new runtime dependencies, which need explicit approval per project constraints. The contracts and format-handler registry already support adding them without redesign.)
+2. Which parsing libraries are approved for .docx/.xlsx/.pptx? Now sized precisely: 39 files (32 `.docx`, 5 `.xlsx`, 2 `.pptx`) sit inside the 15 real configured root paths, concentrated in `ai-employee-book` (21 `.docx`) and `tviq` (9 files); ten of the 15 roots have zero office-format files. Office formats require new runtime dependencies, which need explicit approval per project constraints, **and** the affected roots' `include` patterns must be extended — approving dependencies alone will not surface these files. The contracts and format-handler registry already support adding handlers without redesign.
 3. Where does the Agent Board identity model live today, and what does lee-kb consume — a library, a service, or a shared schema? (Not blocking for the personal `lee` principal, which runs with no Agent Board dependency; relevant once a second principal or consumer needs identity.)
-4. Does this checkout have access to the real `knowledge/sources.toml` and the Employee Zero source roots (~1,200 documents, 15 roots)? Sprint 1's local-file connector was verified against test fixtures and a manual scratch corpus only — the actual import has not run.
+4. ~~Does this checkout have access to the real `knowledge/sources.toml`...~~ **Resolved 2026-08-03**: yes. All 15 configured roots resolved to real, present directories; a full clean sync produced 1,213 live items / 12,699 chunks, closely tracking the `research/employee-zero-kb-reference.md` snapshot (1,209 documents / 12,634 chunks). See `evidence/real-corpus-parity-report.md`.
+5. Is the OR-matcher's measured worst case (~1.521s for a single ubiquitous token, on the current ~1,213-document corpus) acceptable as-is, or does it need a page-size cap / early-exit heuristic before corpus size grows further via office-format ingestion? (New question raised by the real-corpus measurement; see `evidence/real-corpus-parity-report.md` Performance and Recommended Next Actions.)
 
 ## Next Actions Queue
 
-Priority order locked by Lee 2026-08-03 after Sprint 1 review: real-corpus
-information first, parity blockers second, correctness third, benchmark
-contract fourth, measurement fifth.
+Priority order re-ranked by Lee 2026-08-03 after the real-corpus parity
+measurement (`evidence/real-corpus-parity-report.md`): the measurement
+resolved Open Question 4 and sized the office-format gap precisely, so
+approving those dependencies and extending `include` patterns now leads;
+a known correctness defect and the OR-matcher decision follow before
+benchmark and connector work.
 
 | Rank | Action | Owner | Done When |
 |------|--------|-------|-----------|
-| 1 | Run against the Employee Zero corpus: point config at the real `knowledge/sources.toml` (~1,200 documents, 15 roots), `lee-kb sync`, and answer Lee's daily questions | Human + Builder | The full corpus is synchronized and queryable; findings about realistic load recorded |
-| 2 | Approve `.docx`/`.xlsx`/`.pptx` parsing libraries and register format handlers (parity is impossible without them; the real corpus contains office documents) | Human approval + Builder | Dependencies approved and added; `FORMAT_HANDLERS` covers office formats; unhandled include-matched files are reported, not silently invisible; tests added |
-| 3 | Fix S1-R-14: `discover()` and `_resolve()` must share one resolved root base (correctness; fix before any customer deployment) | Builder | A directly built `RootConfig` over a symlinked root discovers and fetches consistently; regression test added |
+| 1 | Approve `.docx`/`.xlsx`/`.pptx` parsing libraries, register format handlers, **and** extend the `include` patterns on the affected roots (real corpus measurement: 39 files, concentrated in `ai-employee-book` and `tviq` — parity is impossible without both dependency approval and the pattern change) | Human approval + Builder | Dependencies approved and added; `FORMAT_HANDLERS` covers office formats; affected roots' `include` patterns updated; unhandled include-matched files are reported, not silently invisible; tests added |
+| 2 | Fix S1-R-14: `discover()` and `_resolve()` must share one resolved root base (correctness; fix before office-format ingestion touches more root paths or any customer deployment) | Builder | A directly built `RootConfig` over a symlinked root discovers and fetches consistently; regression test added |
+| 3 | Decide whether the OR-matcher's measured ~1.521s worst case (Open Question 5) is acceptable as-is or needs a page-size cap / early-exit heuristic before corpus size grows via office-format ingestion | Human + Builder | Decision recorded in `architecture.md` or a backlog item; if a heuristic is chosen, implemented and re-measured against the real corpus |
 | 4 | Assert the retrieval baseline in the harness (S1-R-16): compute hit-at-1/hit-at-10/MRR and fail if they regress from `docs/golden-baseline.md` beyond a stated tolerance | Builder | The benchmark is a contract, not documentation |
-| 5 | Measure OR-search fetch-to-exhaustion on the real corpus (measure before optimizing) | Builder | Latency/volume numbers recorded for common-word queries over ~1,200 documents |
+| 5 | Curate the real golden benchmark from Lee's recurring Chief of Staff questions, using the two ranking edge cases surfaced by the real-corpus measurement (one job-search, one knowledge-discovery query, each topically-adjacent-but-non-canonical) as concrete starting material | Human + Builder | `docs/golden-baseline.md` reports results against the curated corpus |
 | 6 | File the Agent-Orch defect: continuation runs record `launch: null`, making crashed continuations unresumable | Human + Platform | Backlog item exists in agent-orch with the OS1-contract reference |
-| 7 | Curate the real golden benchmark from Lee's recurring Chief of Staff questions (informed by rank 1's experience) | Human + Builder | `docs/golden-baseline.md` reports results against the curated corpus |
-| 8 | Implement the Outlook/Microsoft 365 email connector | Human + Planner | Connector scoped, approved, and implemented against the `Connector` contract |
-| 9 | Resolve Open Question 1 (Employee Zero parity scope for live mission status and dossier validation) | Human + Planner | Parity scope decision recorded in `architecture.md` or `product-definition.md` |
+| 7 | Implement the Outlook/Microsoft 365 email connector | Human + Planner | Connector scoped, approved, and implemented against the `Connector` contract |
+| 8 | Resolve Open Question 1 (Employee Zero parity scope for live mission status and dossier validation) | Human + Planner | Parity scope decision recorded in `architecture.md` or `product-definition.md` |
 
 ## Working Conventions
 

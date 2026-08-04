@@ -91,7 +91,7 @@ Identity: reuse Agent Board identities through an adapter where appropriate, but
 
 ## Sprint definition of done
 
-- [ ] The existing `knowledge/sources.toml` roots import and synchronize into the new projection. *(Not done: this checkout has no real `knowledge/sources.toml` or Employee Zero source roots to import. The local-file connector reads a compatible config shape, verified only against test fixtures and a manual scratch corpus — see `result-review.md`.)*
+- [x] The existing `knowledge/sources.toml` roots import and synchronize into the new projection. *(Done 2026-08-03: the real deployed `ai-employee-factory/knowledge/sources.toml` (15 roots, ~1,200 documents) was synced and queried — 1,213 live items / 12,699 chunks, zero fetch failures, all 15 roots reachable. See `evidence/real-corpus-parity-report.md` and `result-review.md`. Office-format files inside those roots remain unindexed pending dependency approval and `include`-pattern extension — a separate, tracked gap, not a failure of this item.)*
 - [x] A local document can be synchronized twice without duplicate projection rows.
 - [x] A changed document updates its normalized projection, checkpoint, and journal entry.
 - [x] A deleted document is tombstoned and excluded from ordinary search.

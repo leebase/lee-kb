@@ -3,6 +3,81 @@
 > **Running log of completed work.** Newest entries are at the top. Each entry
 > records what changed, why it matters, and how to verify it.
 
+## 2026-08-03 — Real-corpus parity measurement (P1c) and verification (P1d)
+
+### What Was Built
+
+Next Actions Queue rank 1 (run against the real Employee Zero corpus) was
+executed and its findings recorded in
+`evidence/real-corpus-parity-report.md`. No source files changed in this
+step; this was a measurement and documentation pass. Full verification was
+re-driven: `python3 -m black --check src tests` and `python3 -m ruff check
+src tests` both ran clean with no fixes required (`python3 -m pytest
+tests/` and `sync --help` are preserved validator evidence from earlier in
+this run and were not rerun per this step's mandate). `README.md` was
+updated to document the `--workspace-root` and `--database` flags on
+`lee-kb sync`, which existed in `src/lee_kb/main.py` but were previously
+undocumented.
+
+### Why It Matters
+
+This resolves Open Question 4 and closes Next Actions Queue rank 1: lee-kb
+has now synchronized and queried the actual deployed
+`ai-employee-factory/knowledge/sources.toml` (15 roots, ~1,200 documents),
+not just test fixtures and a manual scratch corpus. The measured findings
+materially re-rank the remaining backlog (see `context.md`):
+
+- **Corpus shape matches the reference.** 1,213 live items / 12,699 chunks
+  across all 15 configured roots, closely tracking the
+  `research/employee-zero-kb-reference.md` snapshot (1,209 documents /
+  12,634 chunks); all 13 declared canonical-override promotions took effect
+  correctly; zero fetch failures; zero token-shaped-secret hits.
+- **The office-format gap is real and now sized precisely, not theorized.**
+  39 office-format files (32 `.docx`, 5 `.xlsx`, 2 `.pptx`) sit inside the
+  15 configured root paths, concentrated in `ai-employee-book` (21 `.docx`)
+  and `tviq` (9 files). The connector's own sync summary reports an *empty*
+  unhandled-format histogram across all 15 roots — a structural artifact,
+  because every root's deployed `include` glob list is markdown-only and
+  office files never match `include` before the handler-lookup step runs.
+  Closing this gap requires **both** approving parsing dependencies **and**
+  extending the affected roots' `include` patterns; office-format handlers
+  remain entirely unregistered pending that dependency approval.
+  `FORMAT_HANDLERS` and `DocumentType` still support adding them without
+  redesign, per the Sprint 1 closure requirement — this is unchanged, still
+  deferred implementation, not a deferred contract.
+- **OR-matcher fetch-to-exhaustion is now measured.** The worst-case query
+  ("the", a single ubiquitous token) took ~1.521s against the ~1,213
+  document corpus, roughly 3.4x the category-query mean (0.443s over 10
+  queries, range 0.286s–0.766s). Not yet measured: how this scales once
+  office-format ingestion grows the corpus.
+- **Retrieval quality: 8/10 category queries returned the correct top
+  citation**; 2 (one job-search, one knowledge-discovery query) returned a
+  topically-adjacent but non-canonical document, outranked by literal
+  vocabulary overlap — a BM25 ranking limitation, not a discovery or
+  indexing defect, and a concrete input for curating the real golden
+  benchmark (Next Actions Queue rank 7, formerly rank 7/unranked).
+  No result was denied by permissions in this run (search principal
+  matched every root's declared `owner`).
+- **Sync performance baseline recorded:** full clean sync wall-clock
+  5:20.37 (320.37s), peak RSS ~4.48 GiB, 97% CPU utilization, no swaps.
+  This is now the baseline for future full-resync performance work.
+
+### How to Verify
+
+- `evidence/real-corpus-parity-report.md` — full measurement detail
+  (configuration, corpus shape, unindexed content, retrieval behavior,
+  performance, parity gaps, recommended next actions).
+- `python3 -m pytest tests/` — preserved validator evidence from this run
+  (three independent executions, all exit 0; most recent duration
+  8.967189s); not rerun by this step.
+- `env PYTHONPATH=src python3 -m lee_kb.main sync --help` — preserved
+  validator evidence from this run (two independent executions, both exit
+  0); not rerun by this step.
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests` and `python3 -m
+  ruff check src tests` — both run fresh in this step: `All done! ✨ 🍰 ✨
+  18 files would be left unchanged.` and `All checks passed!`, exit 0, no
+  changes required.
+
 ## 2026-08-03 — Review repairs: S1-R-01, S1-R-10, S1-R-11
 
 The independent review's verdict gate rejected the delivered slice; each
