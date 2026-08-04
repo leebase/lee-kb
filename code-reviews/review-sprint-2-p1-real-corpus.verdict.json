@@ -1,0 +1,288 @@
+{
+  "schema": "review_verdict/v1",
+  "review": "code-reviews/review-sprint-2-p1-real-corpus.md",
+  "subject": "Sprint 2 P1 — real-corpus parity slice (deployed sources.toml consumption, silent-loss reporting, real-corpus measurement, verification and docs)",
+  "commit": "7e74e56",
+  "reviewer_role": "independent Reviewer (agents/reviewer.md, skills/code-review.md)",
+  "verdict": "pass",
+  "summary": "The parity slice holds up under independent inspection at 7e74e56. Glob semantics genuinely distinguish '*' from '**' (probe over eight cases, all as expected), and GLOBAL_DEFAULT_DENY is evaluated before include for every root — probing all seven denied prefixes against all 15 real roots with include widened to **/*.md admitted nothing. Per-root overrides are first-match-wins and really change stored authority: the deployed config declares exactly 13 overrides (12 factory, 1 jobsearch), the projection holds exactly 13 canonical items in the same 12/1 split, each declared pattern matches exactly one stored item, and re-deriving authority from the config reproduces canonical 13/13 with zero mismatches. The unhandled-format, git-ignored, git-unresolved and token-skipped counters are real, reach the CLI, and are not double-counted — a git-ignored file with an unregistered extension lands in exactly one counter, confirmed by probe. The report's measured numbers reproduce independently: 1,213 items / 12,699 chunks / 21,020,672 bytes / 13 canonical / 2 model_produced and all 15 per-root rows read back exactly from the projection; re-deriving discovery from the config over the 15 real roots reproduced 1,213 indexable, 300 git-ignored, 5 unresolved and an empty unhandled histogram; and an independent filesystem tally reproduced 39 office-format files (32 .docx, 5 .xlsx, 2 .pptx). The publication-safety check on the public report passes: no document content, title, in-corpus path, or credential-shaped string appears, and the only personal identifier is the owner principal already published throughout the repository. The S2-R-01 repair verifies independently — both directories are ignored, the working tree carries nothing untracked-and-unignored, and the single historical blob under those directories holds repository-local paths only, no corpus artifact. Sprint 1's governed-retrieval invariants are intact and untouched by this slice. No Critical or High finding survived verification, so the gate passes. Three Medium findings drive the conditional recommendation: a tracked playbook in this public repository still carries absolute host paths to the private corpus workspace (the class of defect S2-R-01 was about, in a file the repair did not reach); one sync pass walks and byte-hashes the whole corpus twice, which is the largest contributor to the 5:20 / 4.48 GiB baseline the report now enshrines; and nothing detects nested configured roots, so in an environment without git the already-nested roots would silently double-index ~293 documents. Seven Low findings cover a counter-partition docstring that contradicts the code, two narrative counts in the report that do not reconcile with the run (nine roots at zero office formats, not ten; 13 distinct queries and 25 executions in the receipt table, not twelve), the P1a/P1b source deliverable committed under a playbook-fix message, a stale test count in context.md, a ruff configuration deprecation, and two unasserted counter properties.",
+  "recommendation": "Ready after specific follow-up",
+  "readiness": {
+    "glob_semantics_distinguish_single_and_double_star": {
+      "state": "verified_true",
+      "evidence": "_compile_glob (local_files.py:438-482) compiles '*' to [^/]* and '**/' to (?:.*/)?. Reviewer probe: '*.md' matches a.md and rejects sub/a.md; '**/*.md' matches a.md, sub/a.md and x/y/z.md; 'docs/*.md' matches docs/a.md and rejects docs/x/a.md; 'docs/**/*.md' matches both. Eight of eight as expected. Covered by tests/test_local_connector.py:267 and :282."
+    },
+    "global_default_deny_enforced_for_every_root": {
+      "state": "verified_true",
+      "evidence": "_matches (local_files.py:489-496) evaluates GLOBAL_DEFAULT_DENY before include, so a root cannot opt a denied path back in. Reviewer probe over the 15 real roots loaded from the deployed config, testing all seven denied prefixes with include widened to **/*.md: zero admissions. The real projection contains zero items whose path carries a denied directory segment at any depth. Covered by tests/test_local_connector.py:300."
+    },
+    "per_root_overrides_first_match_wins_and_change_stored_authority": {
+      "state": "verified_true",
+      "evidence": "RootConfig.metadata_for (local_files.py:237-245) returns on the first matching pattern; probe with an overlapping pair returned (canonical, curated), so the later pattern is not merged. The value reaches storage through _describe (:679) and fetch (:748) into KnowledgeItem.authority (main.py:225-237). On the real projection: 13 declared overrides (12 factory, 1 jobsearch) against 13 stored canonical items in the same 12/1 split; every declared pattern matches exactly one stored item; re-deriving authority from the config for all 13 reproduces canonical 13/13, zero mismatches. Trust behaves identically (2 model_produced, both in the only model_produced root)."
+    },
+    "loss_counters_are_real_reach_the_cli_and_are_not_double_counted": {
+      "state": "verified_true",
+      "evidence": "Counters increment on mutually exclusive branches: git-ignored candidates continue before the handler lookup (local_files.py:650-652). Probe on a constructed git repository with an ignored .docx, an ignored .md, a kept .md and a kept .xlsx: git_ignored=2, unhandled_formats={'.xlsx':1,'(no extension)':1}, one object — the ignored .docx counted exactly once. All five counters reach SyncSummary (main.py:251-262) and print (main.py:317-331); skipped and skipped_token_content print only when non-zero, which is why the real-corpus line omitted them. The token tripwire is a separate content-level check (main.py:218-223)."
+    },
+    "counter_partition_is_documented_accurately": {
+      "state": "verified_false",
+      "evidence": "DiscoveryReport's class docstring (local_files.py:500-519) states every file is accounted for 'in exactly one place', and SyncSummary's docstring (main.py:76-83) repeats it, but git_unresolved is deliberately an overlay: unresolved candidates are still indexed (:646-647, and the field docstring says so). Confirmed on the real corpus — the 5 unresolved candidates are inside the 1,213 indexed documents, while the CLI prints both figures side by side as if disjoint. Finding S2-R-05."
+    },
+    "report_measurements_reproduce_from_the_run": {
+      "state": "verified_true",
+      "evidence": "Four independent spot-checks. (1) Read-only projection query: 1,213 live items, 12,699 chunks, 21,020,672 bytes on disk, 13 canonical / 1,200 derived, 1,211 curated / 2 model_produced, and all 15 per-root document/chunk rows matching the report's table exactly. (2) Re-deriving discovery from the config over the 15 real roots (candidate enumeration, containment, one batched git check-ignore per root, handler lookup) reproduced 1,213 indexable, 300 git-ignored, 5 git-ignore-unresolved and an empty unhandled-format histogram — the exact sync summary line the report quotes. (3) Independent filesystem tally of office formats inside the 15 root paths: 39 files, 32 .docx / 5 .xlsx / 2 .pptx, ai-employee-book 21 and tviq 9. (4) Every root's include glob list confirmed markdown-only, which is the report's stated reason the histogram is structurally empty. Performance figures were not re-measured (that would require re-running the sync) and are labelled single-run observations in the report."
+    },
+    "report_narrative_counts_reconcile_with_the_run": {
+      "state": "verified_false",
+      "evidence": "Two narrative counts do not reconcile. (1) 'Ten of the 15 roots have zero office-format files' — the independent tally finds office files in six roots (ai-employee-book 21, tviq 9, jobsearch 5, pr-business 2, agent-orch 1, factory 1), leaving nine at zero; the same claim is repeated in context.md:140 (S2-R-06). (2) 'Twelve queries were run' — the projection's receipt table records 250 receipts over 13 distinct queries, the 12 reported ones executed twice each plus an unreported 13th executed once (S2-R-07). The measured totals are unaffected."
+    },
+    "public_report_free_of_content_paths_and_personal_detail": {
+      "state": "verified_true",
+      "evidence": "evidence/real-corpus-parity-report.md contains root names, counts, extensions, byte sizes, timings and category labels only. A scan for absolute paths, file:// URIs and home directories returns nothing; no document title, heading or excerpt appears; the two ranking edge cases are described by category, not by document. The only personal identifier is the owner principal lee@leebase.com, already published in README.md, src/lee_kb/main.py:48 and the test suite — not new disclosure. No credential-shaped string appears, consistent with the run's zero token-tripwire hits."
+    },
+    "projection_gitignored_and_no_corpus_artifact_staged": {
+      "state": "verified_true",
+      "evidence": "git check-ignore -v resolves .lee-kb to .gitignore:29 and .agent-orch-scratch to .gitignore:28; *.sqlite is ignored repo-wide. git status --porcelain -uall is empty, so nothing corpus-derived is untracked-and-unignored or staged. git ls-files lists no .sqlite, no .lee-kb/ and no .agent-orch-scratch/ entry. Re-deriving the S2-R-01 history claim independently: the only blob ever committed under either directory was a scratch root marker added in fc757f4 and removed in 7e74e56; reading that blob shows two repository-local paths and a schema version — no corpus URIs, no query results, no document content. The repair holds as described."
+    },
+    "public_repository_free_of_host_absolute_paths": {
+      "state": "verified_false",
+      "evidence": "playbooks/sprint_02_p1_real_corpus_parity.yaml is tracked and public and contains absolute host paths to the private corpus workspace and to the deployed sources.toml at lines 7 and 141. No document content or credentials are exposed, but the maintainer's local filesystem layout and the corpus location are. The S2-R-01 repair covered .agent-orch-scratch/ and .lee-kb/ and did not reach this file. Finding S2-R-02."
+    },
+    "sync_reads_the_corpus_once_per_pass": {
+      "state": "verified_false",
+      "evidence": "_sync_connector calls connector.list_changes() (main.py:188), which calls discover() -> discover_report(), and then calls discover_report() again at main.py:251 for the counters and the unchanged denominator; fetch() re-reads each changed file a third time. Every candidate is byte-read and hashed on both passes (local_files.py:671-693). On the real corpus this is roughly 2,400 full file reads for 1,213 documents and is the largest single contributor to the 5:20.37 wall-clock and ~4.48 GiB peak RSS the report records as the baseline. Finding S2-R-03."
+    },
+    "overlapping_root_paths_are_detected": {
+      "state": "verified_false",
+      "evidence": "Nothing in load_config() or LocalFilesConnector.__init__ compares resolved root paths. Two roots in the deployed config are nested inside other roots. Identity is (connector, 'root:relative'), so the same file under two roots becomes two items with two chunk sets and two citable evidence rows. Reviewer probe confirms zero duplicates today — one nested tree is git-ignored by its parent (293 of that root's 695 candidates) and the other pair is separated by include globs — but git-ignore resolution already fails for 2 of 15 roots (git_unresolved = 5), and without git the nested tree would be indexed twice, adding ~293 duplicate documents silently. Finding S2-R-04."
+    },
+    "sprint_1_governed_retrieval_invariants_still_hold": {
+      "state": "verified_true",
+      "evidence": "git diff 717b11b..HEAD touches connectors/local_files.py and main.py only; no retrieval-path file changed. Re-checked at HEAD: retrieve() raises MissingPrincipalError before any repository access (governance.py:124-128); SingleUserPermissionEvaluator grants only on owner, explicit grant, group intersection or PUBLIC visibility (:85-97), with PROJECT visibility not an implicit grant; permission filtering runs over provider candidates at :148-155 and the first Evidence is constructed at :170 from the permitted list only; one RetrievalReceipt is persisted per released evidence item at :187-198 with EvidenceBundle.__post_init__ enforcing the correspondence; governance.retrieve remains the only public callable returning an EvidenceBundle, guarded by the package sweep at tests/test_governance.py:210. The real run is consistent: 250 receipts for 25 executions at 10 evidence items each, one principal throughout, and all 1,213 permission rows recording that owner at private visibility."
+    },
+    "office_format_contract_still_supported_without_redesign": {
+      "state": "verified_true",
+      "evidence": "FORMAT_HANDLERS (local_files.py:203-208) registers .md/.markdown/.txt/.text only; DocumentType still enumerates the office formats and a handler needs only a document_type and a decode callable, so office support remains deferred implementation rather than a deferred contract, per the locked decision. Independently confirmed that not one of the 15 deployed roots declares a non-markdown include glob, so the report's claim that dependency approval alone cannot close the gap is correct."
+    },
+    "verification_suite_green_on_the_delivered_slice": {
+      "state": "verified_true",
+      "evidence": "Preserved system-validator records, summarized and not re-executed (rerun not permitted for this step): python3 -m pytest tests/ exit 0 with 118 passed at step_01 and 127 passed at step_02 and step_03; python3 -m pytest exit 0 with 127 passed at step_04; python3 -m black --check src tests exit 0 with 18 files unchanged; python3 -m ruff check src tests exit 0, with a deprecation warning recorded as S2-R-10; env PYTHONPATH=src python3 -m lee_kb.main sync --help exit 0, printing the --workspace-root and --database flags README.md now documents."
+    }
+  },
+  "findings": [
+    {
+      "id": "S2-R-02",
+      "severity": "Medium",
+      "category": "publication-safety",
+      "file": "playbooks/sprint_02_p1_real_corpus_parity.yaml",
+      "location": "lines 7 and 141 (playbook context note and the step_03 mission text)",
+      "problem": "A tracked file in this public repository contains absolute host paths to the private corpus workspace and to the deployed sources.toml. No document content, title or credential is exposed, but the maintainer's local filesystem layout and the location of the private corpus are. This is the same class of defect S2-R-01 raised about .agent-orch-scratch/ and .lee-kb/; the repair added both directories to .gitignore but did not reach this already-tracked file, which was committed as part of this sprint (9cca4df, edited in 4e9b989). Rated Medium rather than High because nothing corpus-derived — no document content, no titles, no in-corpus paths, no personal or credential-shaped data — is disclosed, and the repository already publishes the maintainer's name, email and the corpus's root names.",
+      "proposed_fix": "Replace the absolute paths with a placeholder or an environment variable resolved at run time (the playbook already passes --workspace-root explicitly), or keep playbooks outside the public repository. Then re-run the same tracked-file scan for absolute host paths as a standing publication check."
+    },
+    {
+      "id": "S2-R-03",
+      "severity": "Medium",
+      "category": "efficiency",
+      "file": "src/lee_kb/main.py",
+      "location": "_sync_connector(), line 188 (list_changes) and line 251 (second discover_report); LocalFilesConnector.discover/discover_report/_describe at src/lee_kb/connectors/local_files.py:600-601,603-669,671-693",
+      "problem": "One sync pass walks and byte-hashes the entire corpus twice. list_changes() calls discover() which calls discover_report(), and _sync_connector then calls discover_report() a second time solely to obtain the counters and the unchanged denominator. _describe reads every candidate's full bytes to compute its content hash on both passes, and fetch() reads each changed file a third time. On the real corpus that is roughly 2,400 full file reads for 1,213 documents, and it is the largest single contributor to the 5:20.37 wall-clock and ~4.48 GiB peak RSS that evidence/real-corpus-parity-report.md now records as the baseline for all future performance work — so the baseline measures a redundant pass as if it were the cost of syncing.",
+      "proposed_fix": "Have _sync_connector obtain one DiscoveryReport, derive the change list from its objects against the stored cursor, and use the same report for the counters and the unchanged computation; or memoize the report on the connector for the duration of a pass. Add a test that counts discover_report invocations per sync, then re-record the performance baseline."
+    },
+    {
+      "id": "S2-R-04",
+      "severity": "Medium",
+      "category": "correctness",
+      "file": "src/lee_kb/connectors/local_files.py",
+      "location": "LocalFilesConnector.__init__ lines 571-580 and load_config/_parse_root lines 248-289,337-414",
+      "problem": "Nothing detects that one configured root's resolved path lies inside another's. Two roots in the deployed config are nested inside other roots. Because identity is (connector, 'root:relative'), the same file discovered under two roots becomes two knowledge items with two chunk sets and two independently citable evidence rows — duplicate evidence for one source document, with no warning. The current projection has zero duplicates, but only by accident: one nested tree is git-ignored by its parent root (293 of that root's 695 candidates are suppressed that way) and the other pair happens to be separated by non-overlapping include globs. Git-ignore resolution already fails for 2 of the 15 roots on this machine (git_unresolved = 5), and the connector's documented policy for unresolved status is 'count it, don't drop it' — so on a machine without git, or in a container where the roots are not git repositories, the nested tree would be indexed a second time and the corpus would silently grow by roughly 293 duplicate documents.",
+      "proposed_fix": "Compare resolved root paths in load_config()/LocalFilesConnector.__init__ and either reject a configuration whose roots nest, or de-duplicate candidates by resolved absolute path so a file is claimed by exactly one root. Add a regression test with two roots where one contains the other, asserting the file is indexed once."
+    },
+    {
+      "id": "S2-R-05",
+      "severity": "Low",
+      "category": "reporting-accuracy",
+      "file": "src/lee_kb/connectors/local_files.py",
+      "location": "DiscoveryReport class docstring lines 500-519 vs the git_unresolved increment at line 646-647; the same claim in SyncSummary at src/lee_kb/main.py:76-83 and the CLI line at :321-324",
+      "problem": "DiscoveryReport's class docstring states that every file under a declared root is accounted for 'in exactly one place', and SyncSummary's docstring repeats it, but git_unresolved deliberately overlaps with objects: a candidate whose git-ignore status could not be resolved is counted and still indexed, exactly as the field-level docstring says. The two docstrings contradict each other, and the contradiction reaches the user — the CLI prints '1213 created, ..., 300 git-ignored, 5 git-ignore status unresolved' as though the figures partitioned. Confirmed on the real corpus: the 5 unresolved candidates are inside the 1,213 indexed documents, not additional to them.",
+      "proposed_fix": "Correct the DiscoveryReport and SyncSummary class docstrings to state that git_ignored, unhandled_formats, skipped and skipped_token_content partition the non-indexed candidates while git_unresolved is an overlay on the indexed ones, and reword the CLI segment accordingly (for example '5 indexed with git-ignore status unresolved')."
+    },
+    {
+      "id": "S2-R-06",
+      "severity": "Low",
+      "category": "reporting-accuracy",
+      "file": "evidence/real-corpus-parity-report.md",
+      "location": "line 65 ('Ten of the 15 roots have zero office-format files present'), repeated in context.md:140",
+      "problem": "The claim is off by one. An independent filesystem tally over the same 15 configured root paths finds office-format files in six roots — ai-employee-book 21, tviq 9, jobsearch 5, pr-business 2, agent-orch 1, factory 1 — leaving nine roots at zero, not ten. The report's headline total (39 files: 32 .docx, 5 .xlsx, 2 .pptx) and its statement of where the concentration sits both reproduce exactly, so the conclusion is sound and only the distribution sentence is wrong. It matters because the same sentence is quoted in context.md Open Question 2, where it is meant to scope which roots need an include-pattern change.",
+      "proposed_fix": "Change the sentence in both files to 'nine of the 15 roots have zero office-format files; six roots hold at least one', and list the six with their counts so the include-pattern work has an exact target list."
+    },
+    {
+      "id": "S2-R-07",
+      "severity": "Low",
+      "category": "reporting-accuracy",
+      "file": "evidence/real-corpus-parity-report.md",
+      "location": "line 69 ('Twelve queries were run against the real projection') and the Performance table at lines 88-91",
+      "problem": "The projection's own retrieval_receipts table records 250 receipts across 13 distinct queries: the 12 reported queries were each executed twice, and a 13th query was executed once and appears nowhere in the report. The reported measurements are not invalidated — every reported query is present and each execution released 10 evidence items, matching 'none returned an empty result' — but the prose cannot be reconciled against the run's own audit trail, which is the artifact a reader would use to check it.",
+      "proposed_fix": "State distinct queries and total executions separately (12 measured queries, 25 executions recorded), and either report the 13th query's outcome or mark it explicitly as an exploratory run excluded from the sample."
+    },
+    {
+      "id": "S2-R-08",
+      "severity": "Low",
+      "category": "traceability",
+      "file": "src/lee_kb/connectors/local_files.py",
+      "location": "commit 4e9b989, message 'fix(playbook): step 3 must run the corpus sync in the foreground'",
+      "problem": "The entire P1a/P1b source deliverable is committed under a message describing a 4-line playbook edit: the same commit carries src/lee_kb/connectors/local_files.py +409 lines, src/lee_kb/main.py +85, tests/test_local_connector.py +349 and tests/test_cli.py +82. Running git log against the connector therefore shows no record that deployed-config parity and silent-loss reporting were delivered, and a bisect or blame lands on a message that explains none of the change. Nothing is lost, but the history misdescribes the work.",
+      "proposed_fix": "Record what 4e9b989 actually contains in result-review.md so the history stays navigable, and keep playbook edits in separate commits from source deliverables going forward."
+    },
+    {
+      "id": "S2-R-09",
+      "severity": "Low",
+      "category": "documentation",
+      "file": "context.md",
+      "location": "line 58 ('full test suite (109 tests, including the golden corpus) passes')",
+      "problem": "The count is stale and contradicted by this run's preserved system-validator records, which report 118 passed at step_01 and 127 passed at step_02 through step_04. The Sprint 1 review already found the 109 figure unreconciled with the preserved record at the time (S1-R-19); it has now drifted by a further 18 tests while remaining presented as current state in the Recently Completed list.",
+      "proposed_fix": "Update the figure to the preserved count, or drop the number entirely and cite the validator record — a hand-maintained test count is stale by construction after every sprint."
+    },
+    {
+      "id": "S2-R-10",
+      "severity": "Low",
+      "category": "tooling",
+      "file": "pyproject.toml",
+      "location": "lines 49-52 ([tool.ruff] with top-level select and ignore)",
+      "problem": "python3 -m ruff check src tests passes with exit 0 but emits a deprecation warning on every run: the top-level linter settings 'select' and 'ignore' must move to 'lint.select' and 'lint.ignore'. When a future ruff release removes the compatibility shim, the lint command that gates every step of this playbook fails for a configuration reason unrelated to the code, and the failure will look like a code regression.",
+      "proposed_fix": "Move select and ignore under a [tool.ruff.lint] table, leaving line-length at the top level, and re-run ruff to confirm the warning is gone."
+    },
+    {
+      "id": "S2-R-11",
+      "severity": "Low",
+      "category": "test-coverage",
+      "file": "tests/test_cli.py",
+      "location": "tests/test_cli.py:188-213 (summary-line coverage) and tests/test_local_connector.py:499-612 (counter coverage)",
+      "problem": "Two properties this slice depends on are unasserted. First, no test covers the git-ignored or git-ignore-status-unresolved segments of the CLI summary line, although the unhandled-format and token-skipped segments are covered — the only evidence those two segments render correctly is the one-off real-corpus run. Second, no test asserts the ordering guarantee that a git-ignored file with an unregistered extension is counted once as git-ignored and not also as an unhandled format; that ordering is exactly what makes the report's empty histogram meaningful. Both properties hold today — the reviewer verified them by probe — but a reordering of the git-ignore check and the handler lookup in discover_report would pass the whole suite while double-counting.",
+      "proposed_fix": "Add a CLI test asserting both git-ignore segments appear with the right counts, and a connector test with a git-ignored file carrying an unregistered extension asserting git_ignored == 1 and unhandled_formats == {}."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m pytest tests/",
+      "executed_by": "system_validator",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record, summarized and not re-executed (validator rerun is not permitted for this step): four independent executions, all exit 0 — 118 passed at step_01_config_and_matcher_parity (both attempts) and 127 passed at step_02_silent_loss_reporting and step_03_real_corpus_measurement."
+    },
+    {
+      "command": "python3 -m pytest",
+      "executed_by": "system_validator",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record for step_04_verification_and_docs, not re-executed: exit 0, 127 passed."
+    },
+    {
+      "command": "python3 -m black --check src tests",
+      "executed_by": "system_validator",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record for step_04_verification_and_docs, not re-executed: exit 0, 'All done!' with 18 files that would be left unchanged."
+    },
+    {
+      "command": "python3 -m ruff check src tests",
+      "executed_by": "system_validator",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record for step_04_verification_and_docs, not re-executed: exit 0. The preserved output also carries a deprecation warning that the top-level 'ignore' and 'select' settings in pyproject.toml should move to 'lint.ignore' and 'lint.select' — recorded as finding S2-R-10."
+    },
+    {
+      "command": "env PYTHONPATH=src python3 -m lee_kb.main sync --help",
+      "executed_by": "system_validator",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record for step_01_config_and_matcher_parity, not re-executed: two independent executions, both exit 0, printing the --config, --workspace-root and --database flags that README.md now documents."
+    },
+    {
+      "command": "python3 -c \"<reviewer probe: read-only SQLite spot-check of .lee-kb/real-corpus.sqlite>\"",
+      "executed_by": "reviewer",
+      "exit_code": 0,
+      "summary": "Opened the real projection read-only and re-derived the report's Corpus Shape section: 1,213 live knowledge items, 12,699 chunks, 21,020,672 bytes on disk, authority 13 canonical / 1,200 derived (12 canonical in factory, 1 in jobsearch), trust 1,211 curated / 2 model_produced (both in pr-research), and all 15 per-root document/chunk pairs identical to the report's table. Also read the audit surfaces: 1,213 journal rows all 'created', 1,213 permission rows all (lee@leebase.com, private), 250 retrieval receipts over 13 distinct queries and one principal — the last of which is finding S2-R-07."
+    },
+    {
+      "command": "env PYTHONPATH=src python3 -c \"<reviewer probe: re-derive discovery over the 15 configured roots>\"",
+      "executed_by": "reviewer",
+      "exit_code": 0,
+      "summary": "Loaded the deployed sources.toml through load_config() and re-ran the connector's own candidate enumeration, containment rule, batched git check-ignore and handler lookup per root — without hashing, so no projection was written. Reproduced the sync summary exactly: 1,213 indexable, 300 git-ignored, 5 git-ignore-unresolved, unhandled-format histogram {}. Per-root indexable counts match the report's table for all 15 roots, and the 5 unresolved candidates come from the 2 roots that are not inside a git repository and are themselves among the 1,213 indexed."
+    },
+    {
+      "command": "env PYTHONPATH=src python3 -c \"<reviewer probe: glob dialect, global default-deny, override resolution>\"",
+      "executed_by": "reviewer",
+      "exit_code": 0,
+      "summary": "Eight glob cases separating '*' from '**' all behaved as expected. All seven GLOBAL_DEFAULT_DENY prefixes probed against each of the 15 real roots with include widened to **/*.md: zero admissions. metadata_for with two overlapping override patterns returned the first match only. Re-derived authority from the config for the 13 stored canonical items: 13/13 canonical, zero mismatches, and each of the 13 declared override patterns matches exactly one stored item."
+    },
+    {
+      "command": "env PYTHONPATH=src python3 -c \"<reviewer probe: counter partition on a constructed corpus>\"",
+      "executed_by": "reviewer",
+      "exit_code": 0,
+      "summary": "Built a throwaway git repository containing a git-ignored .docx, a git-ignored .md, a kept .md and a kept .xlsx: discover_report returned one object, git_ignored=2 and unhandled_formats={'.xlsx':1,'(no extension)':1} — the git-ignored .docx counted in exactly one bucket, confirming no double counting. A second directory nested inside an ignoring repository was reported fully git-ignored, which is the mechanism behind finding S2-R-04."
+    },
+    {
+      "command": "python3 -c \"<reviewer probe: office-format filesystem tally over the 15 root paths>\"",
+      "executed_by": "reviewer",
+      "exit_code": 0,
+      "summary": "Independent read-only tally of .docx/.xlsx/.pptx files inside the 15 configured root paths, bypassing include/exclude/git-ignore exactly as the report describes: 39 files total — 32 .docx, 5 .xlsx, 2 .pptx — with ai-employee-book at 21 and tviq at 9. Six roots hold at least one and nine hold none, which is finding S2-R-06. Also confirmed that none of the 15 roots declares a non-markdown include glob."
+    },
+    {
+      "command": "git check-ignore -v .lee-kb .agent-orch-scratch",
+      "executed_by": "reviewer",
+      "exit_code": 0,
+      "summary": "Both corpus-derived directories are ignored: .lee-kb by .gitignore line 29 and .agent-orch-scratch by line 28. Independent confirmation of the S2-R-01 repair."
+    },
+    {
+      "command": "git status --porcelain -uall",
+      "executed_by": "reviewer",
+      "exit_code": 0,
+      "summary": "Empty output: the working tree at 7e74e56 is clean with no untracked-and-unignored files, so nothing corpus-derived is staged or awaiting commit."
+    },
+    {
+      "command": "git ls-files",
+      "executed_by": "reviewer",
+      "exit_code": 0,
+      "summary": "No .sqlite file, no .lee-kb/ entry and no .agent-orch-scratch/ entry is tracked. A scan of every tracked file for absolute host paths returned matches in exactly one place beyond documented examples and test fixtures — the tracked playbook, which is finding S2-R-02."
+    },
+    {
+      "command": "git log --all --diff-filter=A --name-only",
+      "executed_by": "reviewer",
+      "exit_code": 0,
+      "summary": "The only blob ever added under .lee-kb/ or .agent-orch-scratch/ in this repository's history is a scratch root marker added in fc757f4 and removed in 7e74e56; reading it with git show confirms it holds two repository-local paths and a schema version, with no corpus URIs, query results or document content. The 'history verified clean of corpus artifacts' claim behind the S2-R-01 repair therefore holds."
+    },
+    {
+      "command": "git diff --stat 717b11b..HEAD",
+      "executed_by": "reviewer",
+      "exit_code": 0,
+      "summary": "Since the Sprint 1 review commit, the only source files changed are src/lee_kb/connectors/local_files.py (+409) and src/lee_kb/main.py (+85), with tests/test_local_connector.py (+349) and tests/test_cli.py (+82) — no retrieval, governance, repository, chunking or contracts file changed, which bounds the Sprint 1 invariant re-check. The same command shows the source deliverable landed in commit 4e9b989, which is finding S2-R-08."
+    }
+  ],
+  "lenses": {
+    "correctness_and_failure_handling": {
+      "finding_ids": ["S2-R-04", "S2-R-05"],
+      "justification": "Change detection remains snapshot-based and idempotent: the cursor is written inside the same transaction as the content it describes, an unfetchable object is skipped with its cursor entry left behind so the next pass retries, and token-shaped content is skipped without advancing the cursor so it is re-reported every sync. Discovery containment is enforced identically at discovery time and fetch time for configured roots. The failures I found are at the composition edges — overlapping root paths that nothing detects, and a counter whose documented partition does not match its actual overlap."
+    },
+    "governance_and_security": {
+      "finding_ids": ["S2-R-02"],
+      "justification": "The governed path is untouched by this slice and still holds under direct re-check: authorization is fail-closed and evaluated over provider candidates before the first Evidence object exists, one receipt is persisted per released evidence item, and governance.retrieve remains the only public surface producing an EvidenceBundle, guarded by the package-wide sweep. The real-corpus run is consistent with all of it — one principal, private visibility on all 1,213 permission rows, 250 receipts for 25 executions at 10 items each. The security-relevant defect in this slice is not in enforcement but in publication: a tracked playbook still exposes absolute host paths to the private corpus."
+    },
+    "connector_and_parity": {
+      "finding_ids": ["S2-R-03", "S2-R-06"],
+      "justification": "The connector consumes the deployed sources.toml faithfully: schema 1, 15 roots, external and required flags, first-match-wins overrides, a glob dialect that separates '*' from '**' as the reference does, a global default-deny that no root can opt out of, and batched git-ignore resolution that degrades to 'count it, don't drop it' rather than crashing. All 15 roots resolve, all 13 declared override promotions land exactly where declared, and the projection tracks the reference snapshot closely. The parity gaps that remain — office formats unregistered and structurally excluded by markdown-only include lists — are correctly identified and correctly sized; what is wrong is the cost of a sync pass and one distribution sentence describing the gap."
+    },
+    "evidence_reporting_and_publication_safety": {
+      "finding_ids": ["S2-R-02", "S2-R-06", "S2-R-07"],
+      "justification": "The report is unusually honest about the limits of its own measurement — it labels the empty unhandled-format histogram a structural artifact rather than a closed gap, marks what was not measured, and keeps to aggregate statistics, root names and timings so that no document content, title, in-corpus path or credential-shaped string reaches the public repository. The measured numbers reproduce independently and exactly. What does not survive scrutiny is narrower than the report's conclusions: two narrative counts that contradict the run's own record, and a disclosure in an adjacent tracked file that the publication discipline applied to the report did not reach."
+    },
+    "tests_and_documentation": {
+      "finding_ids": ["S2-R-08", "S2-R-09", "S2-R-10", "S2-R-11"],
+      "justification": "This slice added real coverage where it mattered: unhandled formats per lowercase extension and scoped to a requested root, git-ignored exclusion, non-git and git-unavailable degradation, the token-shaped content skip, the single-star and double-star glob distinction, global default-deny across roots, and first-match override resolution — 127 tests passing on the preserved record, with black and ruff clean. README now documents the previously undocumented sync flags. The gaps are peripheral: two counter properties asserted only by the one-off real-corpus run, a source deliverable buried under a playbook-fix commit message, a stale hand-maintained test count, and a lint configuration that passes today with a deprecation warning."
+    }
+  },
+  "gate": {
+    "policy": "Critical or High findings fail the gate (severity_threshold: High).",
+    "critical_count": 0,
+    "high_count": 0,
+    "medium_count": 3,
+    "low_count": 7,
+    "result": "pass",
+    "note": "The severity gate passes: the publication-safety check the mission designates as at least High if it fails — leakage of document content, titles, in-corpus paths or personal detail into evidence/real-corpus-parity-report.md — was verified and passes. The commissioning recommendation is nonetheless conditional ('Ready after specific follow-up') because five readiness criteria are recorded verified_false: counter_partition_is_documented_accurately, report_narrative_counts_reconcile_with_the_run, public_repository_free_of_host_absolute_paths, sync_reads_the_corpus_once_per_pass, and overlapping_root_paths_are_detected."
+  },
+  "platform_attestations_not_certified_here": "Execution identity, executed route, validator authority, semantic-judge execution and evidence-chain status are platform-owned and produced after this step returns; this verdict does not certify them. The packet's pre-invocation evidence-chain snapshot is ok=true and is explicitly not the terminal attestation. Noted from the handed-over records without certifying them: repository identity compared equal across all five finished attempts, every producer executed its selected route, and validator authority is recorded verified_false for attempt 1 of step_01_config_and_matcher_parity and verified_true for its attempt 2 and for every subsequent step."
+}

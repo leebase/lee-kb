@@ -1,0 +1,373 @@
+{
+  "playbook_id": "sprint_02_correctness_and_performance",
+  "name": "Sprint 2 - Correctness and performance repairs surfaced by the real corpus",
+  "authoring_notes": [
+    "Scope is deliberately narrow: the three items the real-corpus run proved are wrong or expensive, plus the outstanding baseline-assertion debt. Office-format support (S2 Priority 2) is NOT in scope -- it needs explicit dependency approval from Lee, and it needs include-pattern changes in the deployed config, which is not this repository's to edit.",
+    "Findings repaired here come from code-reviews/review-sprint-2-p1-real-corpus.md: S2-R-04 (nested roots produce duplicate evidence) and S2-R-03 (every sync walks and byte-hashes the corpus twice). S1-R-16 (baseline is documentation, not a contract) is carried from the Sprint 1 review.",
+    "Mixed crew, cost optimized: codex_cli gpt-5.6-sol high for the two implementation repairs; claude_code sonnet for measurement, the baseline test, and documentation; claude_code opus only for the verdict-gated review.",
+    "The deployed corpus location is NOT recorded in this public repository (S2-R-02). Real-corpus steps read CORPUS_CONFIG and CORPUS_WORKSPACE_ROOT from the untracked file .lee-kb/corpus.env.",
+    "Reviewers must preflight their verdict with tools/validate_verdict.py -- two prior review cycles were spent failing the gate on field names rather than review quality."
+  ],
+  "defaults": {
+    "worker": "claude_code",
+    "routing": {
+      "primary": {
+        "harness": "claude_code",
+        "model": "sonnet"
+      },
+      "fallback": {
+        "harness": "codex_cli",
+        "model": "gpt-5.6-sol"
+      }
+    },
+    "retry_policy": {
+      "max_attempts": 2,
+      "strategy": "rerun_with_validation_feedback"
+    }
+  },
+  "run_policy": {
+    "on_step_failure": "halt",
+    "require_validation_pass_to_advance": true
+  },
+  "steps": [
+    {
+      "step_id": "step_01_nested_root_duplicate_evidence",
+      "name": "S2-R-04: one file must be claimed by exactly one root (codex)",
+      "routing": {
+        "primary": {
+          "harness": "codex_cli",
+          "model": "gpt-5.6-sol",
+          "effort": "high"
+        }
+      },
+      "mission": "Before writing, read AGENTS.md, skills/connector-development.md, context.md (Decisions Locked is binding), code-reviews/review-sprint-2-p1-real-corpus.md (finding S2-R-04 is the specification for this step), and src/lee_kb/connectors/local_files.py. The defect: nothing detects that one configured root's resolved path lies inside another's. Because identity is (connector_id, 'root:relative'), a file discovered under two roots becomes two knowledge items with two chunk sets and two independently citable evidence rows -- duplicate evidence for one source document, with independent lifecycles, so tombstoning one leaves the other live. The deployed configuration has two such nested pairs today; the projection is currently duplicate-free only by accident (one nested tree is suppressed by its parent root's git-ignore, the other by non-overlapping include globs). On a machine without git, or where the roots are not git repositories, roughly 293 duplicate documents would be indexed silently. Implement the reviewer's fix, stdlib only: compare resolved root paths in load_config()/LocalFilesConnector.__init__ and either reject a configuration whose roots nest, or de-duplicate candidates by resolved absolute path so a file is claimed by exactly one root -- if you de-duplicate, the claiming root must be deterministic (the most specific, i.e. deepest, resolved path wins) so identity is stable across syncs, and the decision must be recorded in the module docstring. Whichever you choose, an operator must be able to see it happened: surface nested-root detection through the connector's health()/reporting rather than resolving it silently. Add regression tests: two roots where one contains the other, asserting the file is indexed exactly once and under the deterministic root; and a test that the same configuration produces the same claiming root across repeated discovery. Keep all writes within src/lee_kb/ and tests/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/connector-development.md",
+        "context.md",
+        "code-reviews/review-sprint-2-p1-real-corpus.md",
+        "src/lee_kb/connectors/local_files.py",
+        "tests/test_local_connector.py"
+      ],
+      "allowed_paths": [
+        "src/lee_kb/",
+        "tests/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "src/lee_kb/connectors/local_files.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/connectors/local_files.py"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/",
+            "require_collected_tests": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the nested-root handling so a file under overlapping roots is indexed exactly once under a deterministic claiming root, the condition is visible to an operator rather than silent, regression tests cover both nesting and stability across syncs, and the full suite passes. Keep writes inside src/lee_kb/ and tests/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_02_single_discovery_pass",
+      "name": "S2-R-03: one discovery pass per sync (codex)",
+      "routing": {
+        "primary": {
+          "harness": "codex_cli",
+          "model": "gpt-5.6-sol",
+          "effort": "high"
+        }
+      },
+      "mission": "Before writing, read AGENTS.md, skills/development-loop.md, code-reviews/review-sprint-2-p1-real-corpus.md (finding S2-R-03 is the specification for this step), src/lee_kb/main.py, and src/lee_kb/connectors/local_files.py. The defect: one sync pass walks and byte-hashes the entire corpus twice. list_changes() calls discover() which calls discover_report(), and _sync_connector then calls discover_report() a second time solely to obtain the counters and the unchanged denominator; _describe reads every candidate's full bytes on both passes and fetch() reads each changed file a third time. On the real corpus that is roughly 2,400 full file reads for 1,213 documents, and it is the largest single contributor to the recorded 5:20.37 wall-clock and ~4.48 GiB peak RSS -- so the performance baseline currently measures a redundant pass as if it were the cost of syncing. Implement the reviewer's fix, stdlib only: have _sync_connector obtain ONE DiscoveryReport, derive the change list from its objects against the stored cursor, and use that same report for the counters and the unchanged computation; or memoize the report on the connector for the duration of a pass. Preserve existing behavior exactly -- cursor semantics, skip-and-report on unfetchable objects, tombstoning, and every counter surfaced in the CLI summary must be unchanged. Add a test that counts discover_report invocations across one sync pass and asserts it is exactly one. Do not change the public CLI output format. Keep all writes within src/lee_kb/ and tests/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/development-loop.md",
+        "code-reviews/review-sprint-2-p1-real-corpus.md",
+        "src/lee_kb/main.py",
+        "src/lee_kb/connectors/local_files.py",
+        "tests/test_cli.py"
+      ],
+      "allowed_paths": [
+        "src/lee_kb/",
+        "tests/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "src/lee_kb/main.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/main.py"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/",
+            "require_collected_tests": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the sync path so exactly one discovery pass happens per sync, every existing counter and cursor behavior is preserved bit-for-bit, the invocation-count test passes, and the full suite passes. Keep writes inside src/lee_kb/ and tests/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_03_assert_the_baseline",
+      "name": "S1-R-16: make the retrieval baseline a contract, not documentation (sonnet)",
+      "mission": "Before writing, read AGENTS.md, skills/retrieval-development.md, code-reviews/review-sprint-1-personal-foundation.md (finding S1-R-16), docs/golden-baseline.md, and tests/golden/test_golden_corpus.py. The problem: docs/golden-baseline.md records 60.0% hit-at-1, 100% hit-at-10, and 0.766 MRR as the gate semantic retrieval must beat, but no committed test computes those metrics -- a ranking regression that pushed every answer from rank 1 to rank 10 would leave the suite green while destroying the number the sprint promised to defend. Implement: a test in tests/golden/ that computes hit-at-1, hit-at-10, and MRR over the golden corpus through the governed retrieve() surface and asserts each against the recorded baseline within an explicitly stated tolerance. Read the current recorded values from docs/golden-baseline.md rather than hardcoding a second copy of them if you can do so simply and deterministically; if you hardcode, add a test that the hardcoded values match the document so the two cannot drift apart silently. The assertion must fail on regression and must also fail loudly if the metrics IMPROVE beyond tolerance without the document being updated, because an unrecorded improvement means the baseline no longer describes the system. Keep the harness deterministic and offline. Keep all writes within tests/ and docs/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/retrieval-development.md",
+        "code-reviews/review-sprint-1-personal-foundation.md",
+        "docs/golden-baseline.md",
+        "tests/golden/test_golden_corpus.py"
+      ],
+      "allowed_paths": [
+        "tests/",
+        "docs/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "docs/golden-baseline.md",
+            "type": "markdown"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "docs/golden-baseline.md"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/golden/",
+            "require_collected_tests": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the baseline assertion so hit-at-1, hit-at-10, and MRR are computed and asserted against the recorded values within a stated tolerance, the recorded values and the test cannot drift apart silently, and the golden suite passes deterministically offline. Keep writes inside tests/ and docs/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_04_remeasure_real_corpus",
+      "name": "Re-measure the real corpus after the repairs (sonnet)",
+      "mission": "Before acting, read AGENTS.md, skills/test-as-lee.md, and evidence/real-corpus-parity-report.md (the Performance section records the pre-repair baseline: 5:20.37 wall-clock, ~4.48 GiB peak RSS, 1,213 documents, 12,699 chunks).\n\nEXECUTION RULE (a previous run failed on exactly this): run every command SYNCHRONOUSLY IN THE FOREGROUND and block until it returns. Do NOT background any command, do NOT use run_in_background, do NOT start a task and wait for a completion notification -- this is a one-shot invocation and your turn ending is final. The sync takes several minutes; that is expected and you must simply wait for it.\n\nThe corpus location is deliberately NOT written in this public repository: read CORPUS_CONFIG and CORPUS_WORKSPACE_ROOT from the untracked file .lee-kb/corpus.env and use those values. Delete any existing .lee-kb/real-corpus.sqlite so the counts describe a clean full sync, then run, timed:\n  set -a; . .lee-kb/corpus.env; set +a; /usr/bin/time -v env PYTHONPATH=src python3 -m lee_kb.main sync --config \"$CORPUS_CONFIG\" --workspace-root \"$CORPUS_WORKSPACE_ROOT\" --database .lee-kb/real-corpus.sqlite\n\nRecord wall-clock elapsed, peak resident set size, total documents, and total chunks. Then compare against the pre-repair baseline and state the delta plainly. CRITICAL: document and chunk counts must be compared carefully -- if the nested-root repair changed which files are claimed, counts may legitimately differ, and that difference is a finding to report, not a discrepancy to hide. If counts changed, say by how much and explain which repair caused it.\n\nUpdate evidence/real-corpus-parity-report.md: revise the Performance section to show both the pre-repair and post-repair measurements side by side with the delta, and add a short note to Parity Gaps recording what the repairs changed. Preserve every other section. The report must still contain all seven Markdown headings with exactly these texts, unchanged and without prefixes or suffixes: 'Configuration', 'Corpus Shape', 'What Was Not Indexed', 'Retrieval Behavior', 'Performance', 'Parity Gaps', 'Recommended Next Actions'. PUBLICATION CONSTRAINT: this repository is public -- aggregate statistics, counts, extensions, timings, and root names only; never document content, never absolute host paths, never anything personal or credential-shaped. If a measurement cannot be taken, write 'not measured' and say why. Keep all writes within evidence/ and .lee-kb/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/test-as-lee.md",
+        "evidence/real-corpus-parity-report.md",
+        "src/lee_kb/main.py",
+        "src/lee_kb/connectors/local_files.py"
+      ],
+      "allowed_paths": [
+        "evidence/",
+        ".lee-kb/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "evidence/real-corpus-parity-report.md",
+            "type": "markdown"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "evidence/real-corpus-parity-report.md"
+          },
+          {
+            "type": "markdown_headings_present",
+            "path": "evidence/real-corpus-parity-report.md",
+            "headings": [
+              "Configuration",
+              "Corpus Shape",
+              "What Was Not Indexed",
+              "Retrieval Behavior",
+              "Performance",
+              "Parity Gaps",
+              "Recommended Next Actions"
+            ]
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/",
+            "require_collected_tests": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the re-measurement so the sync really ran in the foreground against the real corpus, pre- and post-repair figures appear side by side with an honest delta, any change in document or chunk counts is explained rather than hidden, all required headings survive, and no absolute host path or document content appears. Keep writes inside evidence/ and .lee-kb/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_05_verification_and_docs",
+      "name": "Full verification green and project memory updated (sonnet)",
+      "mission": "Before writing, read AGENTS.md, skills/documentation.md, context.md, sprint-plan.md, WHERE_AM_I.md, result-review.md, and evidence/real-corpus-parity-report.md. First drive full verification green: python3 -m pytest, BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools, and python3 -m ruff check src tests tools, repairing whatever they surface. Then update project memory to match delivered reality: add a result-review.md top entry for this Sprint 2 correctness-and-performance slice naming the repaired findings (S2-R-04, S2-R-03, S1-R-16) and the measured performance delta; update context.md (Recently Completed, Next Actions Queue re-ranked, open questions refreshed); update WHERE_AM_I.md; update sprint-plan.md to describe Sprint 2 rather than only Sprint 1, keeping the Sprint 1 record intact and clearly marked as delivered. State plainly that office-format support remains unimplemented pending Lee's dependency approval AND include-pattern changes in the deployed configuration, and that the curated golden benchmark still does not exist. Do not claim anything is implemented that is not. Keep all writes within src/, tests/, tools/, README.md, context.md, sprint-plan.md, WHERE_AM_I.md, and result-review.md.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/documentation.md",
+        "context.md",
+        "sprint-plan.md",
+        "WHERE_AM_I.md",
+        "result-review.md",
+        "evidence/real-corpus-parity-report.md"
+      ],
+      "allowed_paths": [
+        "src/",
+        "tests/",
+        "tools/",
+        "README.md",
+        "context.md",
+        "sprint-plan.md",
+        "WHERE_AM_I.md",
+        "result-review.md"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "result-review.md",
+            "type": "markdown"
+          },
+          {
+            "path": "context.md",
+            "type": "markdown"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "result-review.md"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest",
+            "require_collected_tests": true
+          },
+          {
+            "type": "command_succeeds",
+            "command": "BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools"
+          },
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m ruff check src tests tools"
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair whatever blocks full verification (pytest, black --check, ruff check across src, tests, and tools) and make project memory match delivered behavior and the measured report exactly. Keep writes inside src/, tests/, tools/, and the named markdown files.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_06_independent_review",
+      "name": "Independent review of the Sprint 2 repairs (opus)",
+      "routing": {
+        "primary": {
+          "harness": "claude_code",
+          "model": "opus"
+        }
+      },
+      "mission": "Before writing, read AGENTS.md, skills/code-review.md, agents/reviewer.md, context.md (Decisions Locked), code-reviews/review-sprint-2-p1-real-corpus.md (the findings this slice claims to repair), evidence/real-corpus-parity-report.md, and the delivered source and tests. Act as the independent Reviewer. Verify with evidence from the code and the run: (1) S2-R-04 is really fixed -- construct overlapping roots and prove a file is indexed exactly once under a deterministic claiming root, and that the condition is visible to an operator rather than silently resolved; (2) S2-R-03 is really fixed -- prove exactly one discovery pass per sync and that cursor semantics, skip-and-report, tombstoning, and every CLI counter are unchanged; (3) S1-R-16 is really fixed -- prove the baseline assertion fails on a simulated ranking regression, not merely that it passes today, and that the recorded document and the test cannot drift apart silently; (4) the re-measured performance figures are reproducible from the run rather than asserted, and any change in document or chunk counts is explained; (5) NO absolute host path, document content, or personal or credential-shaped detail appears in any tracked file -- run a repository-wide check, not just a spot check, and treat any leak as at least a High finding; (6) the Sprint 1 governed-retrieval invariants still hold (fail-closed principal, permission filtering before evidence assembly, one receipt per released evidence item, governance.retrieve as the only public evidence surface). BEFORE YOU FINISH: run 'python3 tools/validate_verdict.py code-reviews/review-sprint-2-correctness.verdict.json' and fix everything it reports -- two prior review cycles were spent failing the gate on field names rather than review quality. Create BOTH the prose review code-reviews/review-sprint-2-correctness.md (exact headings Findings, Residual Risks, Verification) AND the verdict code-reviews/review-sprint-2-correctness.verdict.json conforming to the builtin review_verdict/v1 schema: top level requires verdict, findings, checks_run, and lenses; every finding requires id, severity, file, location, problem, and proposed_fix (the field is 'proposed_fix', NOT 'fix'); every checks_run entry requires command, exit_code, and summary. Residual Risks must state that office-format support and the curated golden benchmark remain open. Keep all writes within code-reviews/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/code-review.md",
+        "agents/reviewer.md",
+        "context.md",
+        "code-reviews/review-sprint-2-p1-real-corpus.md",
+        "evidence/real-corpus-parity-report.md",
+        "tools/validate_verdict.py",
+        "result-review.md"
+      ],
+      "allowed_paths": [
+        "code-reviews/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "code-reviews/review-sprint-2-correctness.md",
+            "type": "markdown"
+          },
+          {
+            "path": "code-reviews/review-sprint-2-correctness.verdict.json",
+            "type": "json"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "code-reviews/review-sprint-2-correctness.md"
+          },
+          {
+            "type": "markdown_headings_present",
+            "path": "code-reviews/review-sprint-2-correctness.md",
+            "headings": [
+              "Findings",
+              "Residual Risks",
+              "Verification"
+            ]
+          },
+          {
+            "type": "json_schema",
+            "path": "code-reviews/review-sprint-2-correctness.verdict.json",
+            "schema_path": "builtin:review_verdict/v1"
+          },
+          {
+            "type": "review_verdict_clean",
+            "path": "code-reviews/review-sprint-2-correctness.verdict.json",
+            "severity_threshold": "High"
+          }
+        ],
+        "system": [
+          {
+            "type": "checks_run_match",
+            "path": "code-reviews/review-sprint-2-correctness.verdict.json",
+            "timeout_seconds": 300,
+            "advisory": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the review so each claimed repair is proven against actual code and run evidence (including a simulated regression for the baseline assertion), the repository-wide leak check is explicit, the verdict passes tools/validate_verdict.py, and the required headings and schema fields are present. Keep writes inside code-reviews/.",
+        "after_retries_exhausted": "halt"
+      }
+    }
+  ]
+}

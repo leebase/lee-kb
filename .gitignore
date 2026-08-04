@@ -20,3 +20,10 @@ dist/
 # Editor and operating-system metadata
 .DS_Store
 ._*
+
+# Governed-run scratch and local knowledge projections.
+# These carry corpus-derived content (absolute source URIs, query results,
+# projection databases) from real syncs. This repository is public: never
+# commit them. (S2-R-01)
+.agent-orch-scratch/
+.lee-kb/

@@ -119,6 +119,14 @@ Users should always be able to inspect original sources.
 
 ---
 
+## Auditable retrieval
+
+Every retrieval produces a Retrieval Receipt: what evidence was retrieved, why, and under what permissions.
+
+This is a headline capability, not an implementation detail. It is the answer to "how do we let an AI employee near our data?" — and it is always on, even in single-user deployments.
+
+---
+
 ## Freshness matters
 
 Every answer should know:
@@ -255,11 +263,35 @@ Normalized representation of a source artifact.
 
 Retrievable portion of a Knowledge Item.
 
+A chunk is either a direct slice of source content or a derived artifact.
+
+---
+
+## Derived Artifact
+
+An LLM-normalized distillation of conversational content: question, summary, resolution, systems, references.
+
+Email threads, Teams conversations, and chat channels retrieve poorly as raw transcripts and well as derived artifacts.
+
+---
+
+## Project
+
+A named bundle of knowledge sources relevant to a team, client, or initiative.
+
+Lightweight references, not copies — the same source can belong to many projects.
+
+Every knowledge item belongs to exactly one project. The field is required from the first release; personal deployments use a single `default` project.
+
+Queries are scoped to a project by default. Projects are also the tenancy boundary for customer deployments.
+
 ---
 
 ## Retrieval
 
 Finding evidence relevant to a question.
+
+Exposed as two surfaces: retrieve() returns raw evidence for AI employees and agents; answer() adds planning and synthesis for humans who want an answer with citations.
 
 ---
 
@@ -295,11 +327,15 @@ Personal deployment.
 
 SQLite.
 
-Local documents.
+Local documents — v1 is a reimplementation of the existing Employee Zero knowledge system with improved architecture, not a greenfield product. The deployed reference corpus is ~1,200 documents across 15 source roots. The existing source-root configuration (`knowledge/sources.toml`) is preserved; the knowledge projection is rebuilt from sources. The old compiled index is not authoritative.
 
-One additional connector.
+Supported formats: Markdown, plain text, Word (.docx), Excel (.xlsx), PowerPoint (.pptx) — the formats the deployed Chief of Staff workflow actually uses.
 
-Lexical retrieval.
+Acceptance criterion: the Chief of Staff can stop using the old `kb` commands and use lee-kb instead without losing capability.
+
+One additional connector: email (decided). It is the highest-value personal corpus, it exercises conversational knowledge, threading, metadata extraction, and future distillation — and every customer has email. Not every customer has GitHub. GitHub remains an important connector but no longer defines the early product.
+
+Lexical retrieval, with the Evidence Bundle carrying per-retriever ranks so fusion and semantic search can be added without schema changes.
 
 Chunking.
 

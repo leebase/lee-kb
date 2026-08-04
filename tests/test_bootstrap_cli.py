@@ -5,7 +5,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -14,7 +13,7 @@ def run_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(PROJECT_ROOT / "src")
     return subprocess.run(
-        [sys.executable, "-m", "lee-kb.main", *arguments],
+        [sys.executable, "-m", "lee_kb.main", *arguments],
         cwd=PROJECT_ROOT,
         env=environment,
         capture_output=True,

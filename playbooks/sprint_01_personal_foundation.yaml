@@ -1,0 +1,612 @@
+{
+  "playbook_id": "sprint_01_personal_foundation",
+  "name": "Sprint 1 - Personal Foundation: local documents to governed lexical evidence in SQLite",
+  "authoring_notes": [
+    "Mixed crew, cost optimized: claude_code opus only for contracts design and final review; claude_code sonnet for governed build steps; codex_cli gpt-5.6-sol for repository, chunking/retrieval, and golden-corpus implementation to spread seat load. Codex is the fallback for claude steps.",
+    "Decisions Locked in context.md are binding: identity model, required project field, append-only sync journal, tombstones, fail-closed principal, receipt fields, schema version, wipe-and-resync.",
+    "Office formats (.docx/.xlsx/.pptx) are DEFERRED in this run pending explicit dependency approval (AGENTS.md guardrail). The connector ships a format-handler registry with Markdown and plain-text handlers; the review step must record the office-format gap.",
+    "research/employee-zero-kb-reference.md is the only in-repo window into the reference system; workers cannot read sibling repos."
+  ],
+  "defaults": {
+    "worker": "claude_code",
+    "routing": {
+      "primary": {
+        "harness": "claude_code",
+        "model": "sonnet"
+      },
+      "fallback": {
+        "harness": "codex_cli",
+        "model": "gpt-5.6-sol"
+      }
+    },
+    "retry_policy": {
+      "max_attempts": 2,
+      "strategy": "rerun_with_validation_feedback"
+    }
+  },
+  "run_policy": {
+    "on_step_failure": "halt",
+    "require_validation_pass_to_advance": true
+  },
+  "steps": [
+    {
+      "step_id": "step_01_define_contracts",
+      "name": "S1-01: Define normalized domain contracts (opus)",
+      "routing": {
+        "primary": {
+          "harness": "claude_code",
+          "model": "opus"
+        }
+      },
+      "mission": "Before writing, read AGENTS.md, skills/development-loop.md, context.md (the Decisions Locked table is binding), sprint-plan.md, architecture.md, product-definition.md, research/employee-zero-kb-reference.md, and research/cerebras.kb. Then: (1) Normalize packaging: rename src/lee-kb/ to src/lee_kb/, update pyproject.toml [project.scripts] to lee_kb.main:main, and update tests/test_bootstrap_cli.py to invoke lee_kb.main; preserve existing CLI behavior. (2) Create docs/sprint-1-contracts.md with the exact headings Identity, Knowledge Item, Chunk, Evidence Bundle, Retrieval Receipt, Synchronization Journal, Permissions, Projects, Freshness, and Open Questions, specifying every field and invariant. (3) Implement src/lee_kb/contracts.py as frozen dataclasses (stdlib only, no new dependencies): knowledge item identity (connector_id, source_object_id) with a REQUIRED project field and tombstone flag; chunk identity (item_id, chunk_ordinal, content_hash); RetrieveRequest with query, principal, top_k, metadata filters (connector, project, date range, document type, tags), freshness requirement, and project; EvidenceBundle carrying per-retriever ranks, citations, and source/sync/retrieval timestamps; RetrievalReceipt with knowledge item ID, chunk ID, content hash, source locator, retrieval timestamp, and principal; journal entry with connector, source object, content hash, previous content hash, change type, and timestamp. (4) Write tests/test_contracts.py covering construction, immutability, required-project enforcement, and receipt field completeness. Keep all writes within docs/, src/, tests/, and pyproject.toml.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/development-loop.md",
+        "context.md",
+        "sprint-plan.md",
+        "architecture.md",
+        "product-definition.md",
+        "research/employee-zero-kb-reference.md",
+        "research/cerebras.kb",
+        "pyproject.toml",
+        "tests/test_bootstrap_cli.py"
+      ],
+      "allowed_paths": [
+        "docs/",
+        "src/",
+        "tests/",
+        "pyproject.toml"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "docs/sprint-1-contracts.md",
+            "type": "markdown"
+          },
+          {
+            "path": "src/lee_kb/contracts.py",
+            "type": "text"
+          },
+          {
+            "path": "tests/test_contracts.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "docs/sprint-1-contracts.md"
+          },
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/contracts.py"
+          },
+          {
+            "type": "markdown_headings_present",
+            "path": "docs/sprint-1-contracts.md",
+            "headings": [
+              "Identity",
+              "Knowledge Item",
+              "Chunk",
+              "Evidence Bundle",
+              "Retrieval Receipt",
+              "Synchronization Journal",
+              "Permissions",
+              "Projects",
+              "Freshness",
+              "Open Questions"
+            ]
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/",
+            "require_collected_tests": true
+          },
+          {
+            "type": "command_succeeds",
+            "command": "env PYTHONPATH=src python3 -c \"from lee_kb import contracts\""
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the contracts so every Decisions Locked invariant from context.md is represented (identity tuples, required project, receipt fields, journal fields, fail-closed principal), the package imports as lee_kb, and the full test suite passes. Keep writes inside docs/, src/, tests/, and pyproject.toml.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_02_approve_contracts",
+      "type": "human_approval",
+      "name": "Human gate: approve the Sprint 1 domain contracts",
+      "mission": "Human gate: read docs/sprint-1-contracts.md and src/lee_kb/contracts.py. Approve only if the contracts faithfully encode the Decisions Locked table in context.md: identity model, required project, receipt self-verifiability, journal fields, fail-closed principal, and freshness triplet. The run parks until the human approves and resumes it.",
+      "inputs": [
+        "docs/sprint-1-contracts.md",
+        "src/lee_kb/contracts.py",
+        "context.md"
+      ]
+    },
+    {
+      "step_id": "step_03_sqlite_repository",
+      "name": "S1-03: SQLite repository with journal, tombstones, and schema version (codex)",
+      "routing": {
+        "primary": {
+          "harness": "codex_cli",
+          "model": "gpt-5.6-sol",
+          "effort": "high"
+        }
+      },
+      "mission": "Before writing, read AGENTS.md, skills/development-loop.md, docs/sprint-1-contracts.md, src/lee_kb/contracts.py, architecture.md (Persistence, Identity, Synchronization Journal, Deletion sections), and research/employee-zero-kb-reference.md. Implement src/lee_kb/repository.py: a repository interface plus a SQLite implementation (stdlib sqlite3 only) that persists knowledge items (with required project, tombstone flag, content hash, source/sync timestamps), chunks (ordinal, content hash, text) with an FTS5 virtual table over chunk text, permissions metadata, connector sync state/cursors, an append-only synchronization journal, retrieval receipts, and a stored schema version. Use transactions with ON CONFLICT upserts; connector cursors must advance only after successful ingestion; deleting a source object tombstones the item (metadata retained, excluded from ordinary search). Write tests/test_repository.py covering: syncing the same document twice produces no duplicate rows; a changed document updates the projection and appends a journal entry with previous content hash; a tombstoned item is excluded from search but its receipts remain resolvable; schema version is stored and readable. Keep all writes within src/lee_kb/ and tests/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/development-loop.md",
+        "docs/sprint-1-contracts.md",
+        "src/lee_kb/contracts.py",
+        "architecture.md",
+        "research/employee-zero-kb-reference.md"
+      ],
+      "allowed_paths": [
+        "src/lee_kb/",
+        "tests/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "src/lee_kb/repository.py",
+            "type": "text"
+          },
+          {
+            "path": "tests/test_repository.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/repository.py"
+          },
+          {
+            "type": "file_exists",
+            "path": "tests/test_repository.py"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/test_repository.py tests/test_contracts.py",
+            "require_collected_tests": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the repository so duplicate-free resync, journal append with previous hash, tombstone exclusion, receipt persistence, and schema version all hold under the targeted tests. Stdlib sqlite3 only; keep writes inside src/lee_kb/ and tests/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_04_local_file_connector",
+      "name": "S1-02: Local-file connector with sources.toml-compatible config (sonnet)",
+      "mission": "Before writing, read AGENTS.md, skills/connector-development.md, docs/sprint-1-contracts.md, src/lee_kb/contracts.py, src/lee_kb/repository.py, and research/employee-zero-kb-reference.md (Source Configuration section). Implement src/lee_kb/connectors/local_files.py plus a connector contract module src/lee_kb/connectors/base.py with discover, list_changes, fetch, permissions, health, and checkpoint responsibilities. Configuration must parse a TOML source-root shape compatible with the Employee Zero knowledge/sources.toml reference: named roots with path, include patterns, exclude patterns (default-deny: anything not matched by include is out), and authority/trust declarations carried as item metadata. Use stdlib tomllib. Implement a format-handler registry with Markdown and plain-text handlers; do NOT add office-format parsing dependencies (deferred pending explicit approval; leave the registry extension point documented in the module docstring). Content hashing is per-artifact; provenance records absolute source path and file timestamps; incremental sync detects new, changed, and deleted files, and deletion tombstones the item via the repository. Write tests/test_local_connector.py covering initial sync, no-op resync, changed file, deleted file to tombstone, and include/exclude enforcement. Keep all writes within src/lee_kb/ and tests/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/connector-development.md",
+        "docs/sprint-1-contracts.md",
+        "src/lee_kb/contracts.py",
+        "src/lee_kb/repository.py",
+        "research/employee-zero-kb-reference.md"
+      ],
+      "allowed_paths": [
+        "src/lee_kb/",
+        "tests/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "src/lee_kb/connectors/local_files.py",
+            "type": "text"
+          },
+          {
+            "path": "tests/test_local_connector.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/connectors/base.py"
+          },
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/connectors/local_files.py"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/test_local_connector.py tests/test_repository.py",
+            "require_collected_tests": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the local-file connector so sources.toml-compatible roots, default-deny include/exclude, per-artifact hashing, tombstoning on delete, and cursor-after-success all hold under the targeted tests. No new dependencies; keep writes inside src/lee_kb/ and tests/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_05_chunking_lexical",
+      "name": "S1-04: Deterministic chunking and lexical retrieval (codex)",
+      "routing": {
+        "primary": {
+          "harness": "codex_cli",
+          "model": "gpt-5.6-sol",
+          "effort": "high"
+        }
+      },
+      "mission": "Before writing, read AGENTS.md, skills/retrieval-development.md, docs/sprint-1-contracts.md, src/lee_kb/contracts.py, src/lee_kb/repository.py, and architecture.md (Ranking Signals and Retrieval Surfaces sections). Implement src/lee_kb/chunking.py (deterministic, heading-aware Markdown chunking with stable ordinals; plain-text fallback by paragraph; same input always yields identical chunks) and src/lee_kb/retrieval.py (lexical retrieval over the repository FTS5 index using BM25 ranking, deterministic tie-breaking by item recency then stable ID, per-retriever rank recorded on every evidence row, source citations with original source locator, and the source/sync/retrieval freshness triplet on every evidence item). The evidence bundle must match the contracts module. No LLM calls, no new dependencies. Write tests/test_retrieval.py covering: exact-token query returns the expected chunk with citation; ranking is deterministic across repeated runs; per-retriever ranks are populated; freshness metadata is present; empty result sets are handled. Keep all writes within src/lee_kb/ and tests/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/retrieval-development.md",
+        "docs/sprint-1-contracts.md",
+        "src/lee_kb/contracts.py",
+        "src/lee_kb/repository.py",
+        "architecture.md"
+      ],
+      "allowed_paths": [
+        "src/lee_kb/",
+        "tests/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "src/lee_kb/chunking.py",
+            "type": "text"
+          },
+          {
+            "path": "src/lee_kb/retrieval.py",
+            "type": "text"
+          },
+          {
+            "path": "tests/test_retrieval.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/chunking.py"
+          },
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/retrieval.py"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/test_retrieval.py tests/test_local_connector.py",
+            "require_collected_tests": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair chunking and retrieval so chunk ordinals are deterministic, BM25 results carry per-retriever ranks, citations, and the freshness triplet, and the targeted tests pass. Keep writes inside src/lee_kb/ and tests/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_06_governance_receipts",
+      "name": "S1-05: Fail-closed authorization, freshness, and retrieval receipts (sonnet)",
+      "mission": "Before writing, read AGENTS.md, skills/retrieval-development.md, docs/sprint-1-contracts.md, src/lee_kb/contracts.py, src/lee_kb/repository.py, src/lee_kb/retrieval.py, and architecture.md (Authorization Layer and Retrieval Surfaces sections). Implement src/lee_kb/governance.py providing the public retrieve() surface that composes permission evaluation, retrieval, evidence assembly, and receipt writing. Invariants: every retrieve() call REQUIRES a principal and raises a typed error without one (fail-closed); permission filtering happens BEFORE evidence assembly so denied content never enters an evidence bundle; the single-user permission model is explicit and extensible (owner principal allowed, unknown principals denied by default); every retrieve() writes a retrieval receipt to the repository with knowledge item ID, chunk ID, content hash, source locator, retrieval timestamp, and principal, including for empty result sets; project scoping is enforced (queries scoped to the requested project only). Write tests/test_governance.py covering: missing principal fails closed; unknown principal receives no evidence; denied evidence never appears in a bundle; a receipt is persisted for every call including empty results; out-of-project evidence is excluded. Keep all writes within src/lee_kb/ and tests/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/retrieval-development.md",
+        "docs/sprint-1-contracts.md",
+        "src/lee_kb/contracts.py",
+        "src/lee_kb/repository.py",
+        "src/lee_kb/retrieval.py",
+        "architecture.md"
+      ],
+      "allowed_paths": [
+        "src/lee_kb/",
+        "tests/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "src/lee_kb/governance.py",
+            "type": "text"
+          },
+          {
+            "path": "tests/test_governance.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/governance.py"
+          },
+          {
+            "type": "file_exists",
+            "path": "tests/test_governance.py"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/test_governance.py tests/test_retrieval.py",
+            "require_collected_tests": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair governance so retrieval is fail-closed on principal, permission filtering precedes evidence assembly, project scoping holds, and a receipt is written for every call. The targeted tests must pass. Keep writes inside src/lee_kb/ and tests/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_07_cli_surface",
+      "name": "S1: CLI surface for sync and governed search (sonnet)",
+      "mission": "Before writing, read AGENTS.md, skills/development-loop.md, skills/test-as-lee.md, docs/sprint-1-contracts.md, src/lee_kb/main.py, src/lee_kb/governance.py, src/lee_kb/connectors/local_files.py, and architecture.md (Synchronization and Configuration sections). Extend src/lee_kb/main.py with subcommands: 'lee-kb init' (write a starter config), 'lee-kb sync [connector] [source]' (user-driven synchronization through the connector and repository), and 'lee-kb search <query> [--project P] [--top-k N] [--principal NAME]' which calls the governed retrieve() surface (principal defaults to the configured owner) and prints ranked evidence with source citations, freshness (last-synced age), and the receipt ID. Configuration path resolution: honor an explicit --config flag and an environment variable override, defaulting to the XDG location documented in architecture.md. No LLM answer synthesis in v1; search prints evidence only. Preserve the existing --help behavior described in tests/test_bootstrap_cli.py. Update tests: extend tests/test_bootstrap_cli.py or add tests/test_cli.py covering init, sync of a temp corpus, and search returning cited evidence end to end. Keep all writes within src/lee_kb/ and tests/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/development-loop.md",
+        "skills/test-as-lee.md",
+        "docs/sprint-1-contracts.md",
+        "src/lee_kb/governance.py",
+        "src/lee_kb/connectors/local_files.py",
+        "architecture.md",
+        "tests/test_bootstrap_cli.py"
+      ],
+      "allowed_paths": [
+        "src/lee_kb/",
+        "tests/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "src/lee_kb/main.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/main.py"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/",
+            "require_collected_tests": true
+          },
+          {
+            "type": "command_succeeds",
+            "command": "env PYTHONPATH=src python3 -m lee_kb.main --help"
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the CLI so init, sync, and governed search work end to end on a temp corpus, --help still describes the governed knowledge fabric, and the full suite passes. Keep writes inside src/lee_kb/ and tests/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_08_golden_corpus",
+      "name": "S1-06: Golden evaluation corpus and lexical baseline (codex)",
+      "routing": {
+        "primary": {
+          "harness": "codex_cli",
+          "model": "gpt-5.6-sol",
+          "effort": "high"
+        }
+      },
+      "mission": "Before writing, read AGENTS.md, sprint-plan.md (Golden corpus guidance section), docs/sprint-1-contracts.md, src/lee_kb/governance.py, and src/lee_kb/connectors/local_files.py. Build the golden evaluation harness: tests/golden/corpus.toml declaring approximately twenty questions drawn from this repository's real documents (product-definition.md, architecture.md, project-plan.md, research/, backlog/) across the five guidance categories (operational status, project management, architecture, job search where the repo permits, knowledge discovery), each with the expected source file and an expected evidence token; plus exactly three negative cases: a question with no evidence in the corpus (must return empty, with a receipt), a question whose evidence exists only outside the queried project scope (must return empty), and a query from an unauthorized principal (must be denied). Mark the file header: 'Seed corpus drawn from repo documents; Lee curates the final twenty from real Chief of Staff usage.' Implement tests/golden/test_golden_corpus.py: sync this repository's own markdown docs into a temp SQLite projection via the local-file connector, run each question through governed retrieve(), assert expected citations for positive cases and correct refusals for negative cases, and write docs/golden-baseline.md recording per-question hit/miss and an overall hit rate (the lexical baseline; semantic retrieval must later beat it). The harness must be deterministic and offline. Keep all writes within tests/ and docs/.",
+      "inputs": [
+        "AGENTS.md",
+        "sprint-plan.md",
+        "docs/sprint-1-contracts.md",
+        "src/lee_kb/governance.py",
+        "src/lee_kb/connectors/local_files.py"
+      ],
+      "allowed_paths": [
+        "tests/",
+        "docs/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "tests/golden/corpus.toml",
+            "type": "text"
+          },
+          {
+            "path": "tests/golden/test_golden_corpus.py",
+            "type": "text"
+          },
+          {
+            "path": "docs/golden-baseline.md",
+            "type": "markdown"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "tests/golden/corpus.toml"
+          },
+          {
+            "type": "file_exists",
+            "path": "docs/golden-baseline.md"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/golden/",
+            "require_collected_tests": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the golden harness so all positive questions assert real citations, the three negative cases assert refusal semantics (empty-with-receipt, out-of-scope empty, unauthorized denied), the baseline document records per-question results, and pytest tests/golden/ passes deterministically offline. Keep writes inside tests/ and docs/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_09_full_verification_docs",
+      "name": "S1-07: Full verification green and project memory updated (sonnet)",
+      "mission": "Before writing, read AGENTS.md, skills/documentation.md, skills/test-as-lee.md, sprint-plan.md, context.md, WHERE_AM_I.md, and result-review.md. First drive full verification green: python3 -m pytest, python3 -m black --check src tests, and python3 -m ruff check src tests, repairing any surfaced code, test, or formatting issues. Then perform the documentation contract: update README.md with real installation and usage (init, sync, search) reflecting delivered behavior only; update sprint-plan.md task statuses and definition-of-done checkboxes to match reality (check only what is demonstrably true); update context.md (move completed work to Recently Completed, refresh the Next Actions Queue, keep open questions current); update WHERE_AM_I.md for the new milestone; add a result-review.md top entry for the delivered Sprint 1 slice naming files and acceptance criteria; explicitly note that office formats (.docx/.xlsx/.pptx) remain deferred pending dependency approval. Do not claim anything is implemented that is not. Keep all writes within src/, tests/, README.md, sprint-plan.md, context.md, WHERE_AM_I.md, and result-review.md.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/documentation.md",
+        "skills/test-as-lee.md",
+        "sprint-plan.md",
+        "context.md",
+        "WHERE_AM_I.md",
+        "result-review.md",
+        "docs/golden-baseline.md"
+      ],
+      "allowed_paths": [
+        "src/",
+        "tests/",
+        "README.md",
+        "sprint-plan.md",
+        "context.md",
+        "WHERE_AM_I.md",
+        "result-review.md"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "README.md",
+            "type": "markdown"
+          },
+          {
+            "path": "result-review.md",
+            "type": "markdown"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "README.md"
+          },
+          {
+            "type": "file_exists",
+            "path": "result-review.md"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest",
+            "require_collected_tests": true
+          },
+          {
+            "type": "command_succeeds",
+            "command": "BLACK_NUM_WORKERS=1 python3 -m black --check src tests"
+          },
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m ruff check src tests"
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair whatever blocks full verification (pytest, black --check, ruff check) and make the project-memory docs match delivered behavior exactly. Keep writes inside src/, tests/, and the named markdown files.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_10_independent_review",
+      "name": "Independent review of the Sprint 1 slice (opus)",
+      "routing": {
+        "primary": {
+          "harness": "claude_code",
+          "model": "opus"
+        }
+      },
+      "mission": "Before writing, read AGENTS.md, skills/code-review.md, agents/reviewer.md, context.md (Decisions Locked), docs/sprint-1-contracts.md, and the delivered source and tests under src/lee_kb/ and tests/. Act as the independent Reviewer role. Verify each product invariant with evidence from the code: authorization is fail-closed and precedes evidence assembly; receipts are written for every retrieval with the locked fields; provenance and the freshness triplet survive end to end; identity follows the locked tuples; project scoping is enforced; the sync journal is append-only; tombstones exclude items from search; no unapproved runtime dependencies were added (stdlib only). Check the golden baseline document reflects the harness results. Create BOTH the prose review code-reviews/review-sprint-1-personal-foundation.md AND the machine-readable verdict code-reviews/review-sprint-1-personal-foundation.verdict.json conforming to the builtin review_verdict/v1 schema (findings with severities, checks run, and an overall verdict; Critical or High findings fail the gate). Create the prose review with the exact headings Findings, Residual Risks, and Verification: list concrete findings with file references or state that no findings were discovered; Residual Risks must include the deferred office-format handlers and any weak spots you identify; Verification must list the commands you ran and their results. Keep all writes within code-reviews/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/code-review.md",
+        "agents/reviewer.md",
+        "context.md",
+        "docs/sprint-1-contracts.md",
+        "docs/golden-baseline.md",
+        "result-review.md"
+      ],
+      "allowed_paths": [
+        "code-reviews/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "code-reviews/review-sprint-1-personal-foundation.md",
+            "type": "markdown"
+          },
+          {
+            "path": "code-reviews/review-sprint-1-personal-foundation.verdict.json",
+            "type": "json"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "code-reviews/review-sprint-1-personal-foundation.md"
+          },
+          {
+            "type": "markdown_headings_present",
+            "path": "code-reviews/review-sprint-1-personal-foundation.md",
+            "headings": [
+              "Findings",
+              "Residual Risks",
+              "Verification"
+            ]
+          },
+          {
+            "type": "json_schema",
+            "path": "code-reviews/review-sprint-1-personal-foundation.verdict.json",
+            "schema_path": "builtin:review_verdict/v1"
+          },
+          {
+            "type": "review_verdict_clean",
+            "path": "code-reviews/review-sprint-1-personal-foundation.verdict.json",
+            "severity_threshold": "High"
+          }
+        ],
+        "system": [
+          {
+            "type": "checks_run_match",
+            "path": "code-reviews/review-sprint-1-personal-foundation.verdict.json",
+            "timeout_seconds": 300,
+            "advisory": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the review so every product invariant is verified against actual code with file references, findings are concrete or explicitly absent, and the required headings are present. Keep writes inside code-reviews/.",
+        "after_retries_exhausted": "halt"
+      }
+    }
+  ]
+}

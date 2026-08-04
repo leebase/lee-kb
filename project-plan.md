@@ -49,35 +49,41 @@ can find evidence without knowing where the original information lives.
 
 **Status:** Active / Sprint 1
 
-**Goal:** Prove one complete local-document retrieval path.
+**Goal:** Reimplement the existing Employee Zero knowledge system on the lee-kb architecture — one complete local-document retrieval path proven against the real deployed corpus (~1,200 documents, 15 source roots).
+
+**Migration principle:** Preserve the existing `knowledge/sources.toml` source-root configuration and rebuild the knowledge projection from sources. The existing `.kb/index.sqlite` is a reference, not an authority. The current `python -m kb build` process already demonstrates configurable roots, deterministic chunking, provenance, content hashes, atomic rebuild, and SQLite FTS5 — lee-kb evolves this workflow rather than replacing it.
 
 **Core components:**
 
 1. Connector contract and local-file connector.
-2. Normalized knowledge-item and chunk model.
-3. SQLite repository with sync state and transactions.
+2. Normalized knowledge-item and chunk model with required project field.
+3. SQLite repository with sync state, append-only sync journal, schema version, and transactions.
 4. Deterministic chunking and lexical search.
 5. Provenance, freshness metadata, authorization filtering, and retrieval receipts.
+6. Golden evaluation corpus (~20 real questions) establishing the lexical baseline.
 
 **Success criteria:**
 
 - A changed local document is incrementally synchronized.
 - Exact-token queries return ranked chunks with source citations.
 - Results are filtered before evidence assembly and carry freshness data.
+- The golden corpus runs as a test fixture and records a measurable baseline.
 - The workflow is covered by automated and end-to-end user-path tests.
+- **Acceptance:** the Chief of Staff can switch from the old `kb` commands to lee-kb without losing capability.
 
 ### Phase 2 — Connector and retrieval expansion
 
 **Status:** Planned
 
-**Goal:** Add one approved external connector and improve retrieval quality while preserving the first-release contracts.
+**Goal:** Add the email connector and improve retrieval quality while preserving the first-release contracts.
 
 **Potential components:**
 
-- Outlook or GitHub connector, selected after the personal foundation is working.
+- Email connector: Outlook/Microsoft 365 first (decided 2026-08-03), Gmail as an early follow-on. GitHub follows in a later phase.
+- MCP server exposing the same public retrieval API as the CLI.
 - Metadata filters and relationship extraction.
-- Optional semantic search provider and hybrid ranking.
-- Targeted refresh when a freshness requirement cannot be met from the projection.
+- Optional semantic search provider and hybrid ranking — must demonstrate measurable improvement over the lexical golden-corpus baseline.
+- Targeted refresh (opt-in per query) when a freshness requirement cannot be met from the projection.
 
 ### Phase 3 — Team deployment and governance hardening
 
@@ -90,7 +96,7 @@ can find evidence without knowing where the original information lives.
 - PostgreSQL persistence provider.
 - Explicit tenant and permission models.
 - Central retrieval service and connector health operations.
-- Expanded retrieval audit and contradiction reporting.
+- Expanded retrieval audit reporting.
 
 ### Phase 4 — Enterprise and ecosystem integration
 

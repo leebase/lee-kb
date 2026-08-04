@@ -1,0 +1,301 @@
+{
+  "schema": "review_verdict/v1",
+  "review": "code-reviews/review-sprint-1-personal-foundation.md",
+  "subject": "Sprint 1 — Personal Foundation",
+  "commit": "717b11b",
+  "reviewer_role": "independent Reviewer (agents/reviewer.md, skills/code-review.md)",
+  "verdict": "pass",
+  "summary": "The governed retrieval slice holds up under independent inspection at 717b11b. Authorization is fail-closed and precedes evidence assembly; governance.retrieve() is the only public surface that produces an EvidenceBundle and the package-wide sweep guards that; every released evidence item carries a persisted receipt with all eight locked fields; provenance and the source/sync/retrieval triplet survive from fetch to citation to receipt; identity follows the locked (connector, source_object) and (item, ordinal, hash) tuples; project scoping is required with no default and enforced in SQL and in EvidenceBundle; the synchronization journal is insert-only; tombstones leave ordinary search while their receipts stay resolvable; retrieval grants no execution authority; the runtime dependency list is empty. I rebuilt the golden projection myself and reproduced the recorded baseline exactly (100.0% hit-at-10, 60.0% hit-at-1, MRR 0.766, per-question ranks identical). The prior High finding S1-R-01 is genuinely fixed. No Critical or High finding survived verification, so the gate passes. Five Medium findings are why the commissioning recommendation is conditional: denied and empty retrievals leave no durable record at all (the unauthorized golden control produces denied_count=3 with zero persisted rows); fail_on_stale persists receipts for evidence it then refuses to return; discover() and _resolve() still disagree about root containment for a directly-constructed RootConfig over a symlinked root, which the S1-R-10 skip logic now turns into a quiet empty projection; pyproject declares Python >=3.10 while tomllib is imported unconditionally (3.11+); and the hit-at-1/MRR numbers that gate semantic adoption are computed by no committed test. Six Low findings cover the ungoverned public Repository.search() content path, two stale documentation records (the baseline's denial count, and a 109-vs-106 test count that contradicts the preserved validator record), unhandled sqlite3/ValueError paths in cmd_sync, positional receipt-ID recovery in the CLI, and item project being read from the chunk row in search().",
+  "recommendation": "Ready after specific follow-up",
+  "readiness": {
+    "authorization_fail_closed": {
+      "state": "verified_true",
+      "evidence": "governance.py:124-128 raises MissingPrincipalError before any repository access; tests/test_governance.py:91 covers both an omitted principal and an explicit principal=None. SingleUserPermissionEvaluator (governance.py:85-97) grants only on owner, explicit principal grant, group intersection, or PUBLIC visibility; PROJECT visibility is deliberately not an implicit grant. Probe D: a non-owner querying a PRIVATE item received evidence=0, denied_count=1, and zero receipt rows."
+    },
+    "authorization_precedes_evidence_assembly": {
+      "state": "verified_true",
+      "evidence": "governance.py:144-155 evaluates permissions over the provider's SearchHit candidates; the first Evidence object is constructed at :170 from the permitted list only. LexicalRetriever returns SearchHit rows and never evidence (retrieval.py:45-61)."
+    },
+    "governed_retrieve_is_the_only_public_evidence_bundle_surface": {
+      "state": "verified_true",
+      "evidence": "tests/test_governance.py:180-211 sweeps every public name in every lee_kb module for callables annotated to return EvidenceBundle and asserts the result is exactly [('lee_kb.governance', 'retrieve')]; retrieval.py:24 exports only LEXICAL_RETRIEVER, LexicalRetriever, and StaleEvidenceError. This closes the prior High finding S1-R-01."
+    },
+    "all_public_content_returning_apis_are_governed": {
+      "state": "verified_false",
+      "evidence": "Repository.search()/SQLiteRepository.search() (repository.py:82-95,612-660) is public and exported, takes no principal, applies no permission filter, and writes no receipt. Probe D: for a principal the governed path denies (evidence=0, denied_count=1), repository.search() returned the chunk text and left 0 receipt rows. The S1-R-01 sweep cannot catch this class because it matches only on an EvidenceBundle return annotation. Recorded as finding S1-R-17 at Low severity because this is the persistence provider boundary LexicalRetriever is built on and every shipped surface goes through governance.retrieve()."
+    },
+    "receipts_for_every_released_evidence_item_with_locked_fields": {
+      "state": "verified_true",
+      "evidence": "governance.py:187-198 persists one RetrievalReceipt per evidence item through repository.record_receipt before the bundle is returned, populating all eight locked fields, none of which has a default (contracts.py:592-599). contracts.py:601-617 re-checks item-ID, chunk-ID, and content-hash agreement; EvidenceBundle.__post_init__ (:654-674) enforces one receipt per evidence item, same order, same chunk ID, same principal, same retrieval timestamp. Covered by tests/test_governance.py:138."
+    },
+    "durable_audit_record_for_denied_or_empty_retrievals": {
+      "state": "verified_false",
+      "evidence": "Receipts are evidence-shaped, so a retrieval that releases nothing persists nothing: denied_count exists only on the returned bundle. Probe: the negative-unauthorized golden control returns evidence=0, receipts=0, denied_count=3, leaving no durable trace of the refusal. Finding S1-R-12."
+    },
+    "receipts_record_only_evidence_actually_released": {
+      "state": "verified_false",
+      "evidence": "governance.py:187-205 persists receipts before evaluating freshness, so a fail_on_stale refusal leaves receipts asserting a release that did not happen. Probe B: StaleEvidenceError raised, list_receipts() returned 1 row. Finding S1-R-13."
+    },
+    "provenance_survives_end_to_end": {
+      "state": "verified_true",
+      "evidence": "SourceLocator is captured at fetch (connectors/local_files.py:392-398), persisted with the item (repository.py:394-439), rebuilt on read (:715-749), attached to every Citation and RetrievalReceipt (governance.py:161-196), and printed by the CLI (main.py:339). Authority and trust are declared by config and carried through to the citation, with model_produced surfaced in CLI output (main.py:341-342)."
+    },
+    "freshness_triplet_survives_end_to_end": {
+      "state": "verified_true",
+      "evidence": "source_timestamp and sync_timestamp travel onto every Evidence (governance.py:182-183); the retrieval timestamp is stamped once (:141), validated timezone-aware (:220-224), and carried on the bundle and every receipt; _freshness_report (retrieval.py:113-134) reports oldest sync, newest source, and observed staleness; the CLI renders sync age (main.py:330). Covered by tests/test_retrieval.py:145."
+    },
+    "identity_follows_locked_tuples": {
+      "state": "verified_true",
+      "evidence": "KnowledgeItemId is (connector_id, source_object_id) and ChunkId is (item_id, chunk_ordinal, content_hash) (contracts.py:230-273), both frozen and validated. The receipt stores item ID, chunk ID, content hash, and source locator, so it stays independently verifiable after re-chunking (contracts.py:584-617). Matches the locked decision in context.md."
+    },
+    "project_scoping_enforced": {
+      "state": "verified_true",
+      "evidence": "project is a required, defaultless field on KnowledgeItem, Chunk, JournalEntry, RetrieveRequest, and RetrievalReceipt; filters.projects must contain the request project (contracts.py:463-466); repository.search filters i.project in SQL (repository.py:646); the repository rejects a chunk whose project differs from its item (:386-387); EvidenceBundle rejects evidence outside effective_projects (contracts.py:657-663). Covered by tests/test_governance.py:165 and the out-of-scope golden control."
+    },
+    "sync_journal_append_only": {
+      "state": "verified_true",
+      "evidence": "synchronization_journal is written only by _append_journal and only via INSERT (repository.py:524-551); a grep across src/ finds no UPDATE or DELETE against synchronization_journal or retrieval_receipts. Unchanged objects are not journaled (repository.py:307-328), covered by tests/test_local_connector.py:142; a re-created object after a tombstone journals CREATED."
+    },
+    "tombstones_excluded_from_search": {
+      "state": "verified_true",
+      "evidence": "repository.search filters AND (? OR i.tombstone = 0) unless include_tombstoned is set (repository.py:647); tombstone_item marks the row and journals DELETED without discarding chunks or receipts (:335-379). Probe F: governed evidence 1 -> 0 after tombstoning, include_tombstoned=True still returns 1 by contract, journal [created(1), deleted(2)], and the earlier receipt still resolves. Matches tests/test_repository.py:109."
+    },
+    "retrieval_grants_no_execution_authority": {
+      "state": "verified_true",
+      "evidence": "governance.retrieve() returns an EvidenceBundle and nothing else; no module under src/lee_kb/ interprets, executes, or acts on retrieved text. The CLI prints evidence, citation, sync age, and receipt number only (main.py:315-352)."
+    },
+    "stdlib_only_no_unapproved_runtime_dependencies": {
+      "state": "verified_true",
+      "evidence": "pyproject.toml:23-25 declares an empty runtime dependencies list; pytest, black, and ruff are dev extras only. Every import across src/lee_kb/ is standard library (argparse, dataclasses, datetime, enum, fnmatch, hashlib, json, os, pathlib, re, sqlite3, sys, tomllib)."
+    },
+    "declared_python_support_matches_the_code": {
+      "state": "verified_false",
+      "evidence": "pyproject.toml:10 declares requires-python = '>=3.10' and :21 classifies 3.10, but tomllib is standard library only from 3.11 and is imported unconditionally at src/lee_kb/main.py:20 and src/lee_kb/connectors/local_files.py:62. On 3.10 the install succeeds and every CLI command fails with ModuleNotFoundError. Finding S1-R-15."
+    },
+    "golden_baseline_document_reflects_harness_results": {
+      "state": "verified_true",
+      "evidence": "I rebuilt the harness projection independently (probe_baseline.py: same roots, chunker, and governed retrieve()) and recomputed the metrics: hit-at-10 20/20 (100.0%), hit-at-1 12/20 (60.0%), MRR 0.766, and per-question ranks identical to the table in docs/golden-baseline.md. The three negative controls behave as documented. One recorded number does not match: line 62 states 1 denied candidate where the harness now yields 3 (finding S1-R-18), and nine table rows carry a duplicated Hit cell."
+    },
+    "golden_baseline_metrics_are_regression_guarded": {
+      "state": "verified_false",
+      "evidence": "No committed test computes hit-at-1, hit-at-10, or MRR. tests/golden/test_golden_corpus.py:148-171 asserts only that the expected citation appears somewhere in the governed top 10, and the unauthorized control asserts denied_count >= 1. A regression that moved every answer from rank 1 to rank 10 would leave the suite green while destroying the number the sprint promised to defend. Finding S1-R-16."
+    },
+    "connector_discovery_and_fetch_agree_on_containment": {
+      "state": "verified_false",
+      "evidence": "discover() compares against root.path.resolve() (local_files.py:291) while _resolve() compares against the unresolved root.path (:451-455). Probe A: for a RootConfig built directly over a symlinked root, discover() returned notes:note.md and fetch() raised 'source_object_id escapes its root'; resolving the root first made fetch() succeed. Since S1-R-10 made unfetchable objects non-fatal, this presents as '0 created ... N skipped' and an empty projection. The CLI is immune only because load_config() resolves the path (:183). Finding S1-R-14."
+    }
+  },
+  "findings": [
+    {
+      "id": "S1-R-12",
+      "severity": "Medium",
+      "category": "governance-audit",
+      "file": "src/lee_kb/governance.py",
+      "location": "retrieve(), lines 148-198 (permission loop and receipt loop)",
+      "problem": "A retrieval that releases nothing leaves nothing durable. Receipts are written per released evidence item, so a denied retrieval persists no row at all, and denied_count exists only inside the returned bundle, which the CLI prints and discards. Probe: the negative-unauthorized golden control returns evidence=0, receipts=0, denied_count=3 — the event an auditor most wants (who asked for what and was refused) is unrecorded.",
+      "proposed_fix": "Persist a query-level record (query, principal, project, retrieval timestamp, candidate count, denied count) alongside the per-evidence receipts, or promote the deferred query-level receipt into the contract. docs/golden-baseline.md already documents the gap; the fix is to close it, not to re-document it."
+    },
+    {
+      "id": "S1-R-13",
+      "severity": "Medium",
+      "category": "governance-audit",
+      "file": "src/lee_kb/governance.py",
+      "location": "retrieve(), lines 187-205 (record_receipt before the fail_on_stale raise)",
+      "problem": "Receipts are persisted before the fail_on_stale check runs, so a refused retrieval leaves receipts asserting that evidence was released when the caller received an exception instead. Probe B: StaleEvidenceError raised and list_receipts() returned 1 row. A receipt is defined as the auditable record of one piece of evidence leaving the platform (contracts.py:584-590); this makes it record a departure that never happened.",
+      "proposed_fix": "Build the freshness report and evaluate fail_on_stale before the receipt loop so the refusal path writes no receipts, or write an explicitly withheld-marked record instead."
+    },
+    {
+      "id": "S1-R-14",
+      "severity": "Medium",
+      "category": "correctness",
+      "file": "src/lee_kb/connectors/local_files.py",
+      "location": "LocalFilesConnector.discover() line 291 vs LocalFilesConnector._resolve() lines 451-455",
+      "problem": "discover() compares against root.path.resolve() but _resolve() — used by fetch, refresh, permissions, and relationships — compares against the unresolved root.path. For a RootConfig built directly (as tests/golden/test_golden_corpus.py:52-66 and any embedding consumer do) over a root whose own path traverses a symlink, every file is discovered and no file is fetchable. Probe A: discover() returned notes:note.md, fetch() raised 'source_object_id escapes its root', and resolving the root first made fetch() succeed. Since S1-R-10 made unfetchable objects non-fatal, the user-visible result is a successful-looking '0 created ... N skipped' and an empty projection. The CLI is immune only because load_config() resolves the path first (line 183).",
+      "proposed_fix": "Resolve the root once — in RootConfig construction or in LocalFilesConnector.__init__ — so discovery and fetch share one base, and add a test that builds RootConfig directly over a symlinked root and asserts the two agree."
+    },
+    {
+      "id": "S1-R-15",
+      "severity": "Medium",
+      "category": "packaging",
+      "file": "pyproject.toml",
+      "location": "lines 10 and 21 (requires-python and the 3.10 classifier) vs src/lee_kb/main.py:20 and src/lee_kb/connectors/local_files.py:62",
+      "problem": "requires-python = '>=3.10' and the Programming Language :: Python :: 3.10 classifier promise 3.10 support, but tomllib is standard library only from 3.11. On 3.10 the install succeeds and then importing the connector — and therefore every lee-kb init/sync/search invocation — dies with ModuleNotFoundError: tomllib.",
+      "proposed_fix": "Set requires-python = '>=3.11' and drop the 3.10 classifier. A tomli fallback would be a new runtime dependency and needs explicit approval per AGENTS.md."
+    },
+    {
+      "id": "S1-R-16",
+      "severity": "Medium",
+      "category": "test-coverage",
+      "file": "tests/golden/test_golden_corpus.py",
+      "location": "lines 148-171 (positive-case assertions) vs docs/golden-baseline.md:56-70",
+      "problem": "The baseline document is the stated gate for adopting semantic retrieval (60.0% hit-at-1, 0.766 MRR), but no committed test computes hit-at-1, hit-at-10, or MRR. The harness asserts only that the expected citation appears somewhere in the governed top 10, and the unauthorized control asserts denied_count >= 1. A ranking regression that pushed every answer from rank 1 to rank 10 would leave the suite green while destroying the number the sprint promised to defend. I recomputed the metrics independently and they reproduce exactly, so the recorded figures are true today — they are simply unguarded.",
+      "proposed_fix": "Add a harness test that computes hit-at-1/hit-at-10/MRR over the corpus and asserts them against the recorded baseline within a stated tolerance, failing on drift."
+    },
+    {
+      "id": "S1-R-17",
+      "severity": "Low",
+      "category": "governance-boundary",
+      "file": "src/lee_kb/repository.py",
+      "location": "Repository.search() lines 82-95 and SQLiteRepository.search() lines 612-660; sweep at tests/test_governance.py:180-211",
+      "problem": "Repository.search()/SQLiteRepository.search() is public and exported, takes no principal, applies no permission filter, writes no receipt, and returns full chunk text for any project. Probe D: for a principal the governed path denies (evidence=0, denied_count=1), repository.search() returned the chunk text and left zero receipts. The S1-R-01 regression sweep cannot catch this class because it inspects only public callables whose return annotation mentions EvidenceBundle — it proves governance is the only way to get a bundle, not the only way to get content. Rated Low because this is the persistence provider boundary LexicalRetriever is built on and every shipped surface goes through governance.retrieve().",
+      "proposed_fix": "State in Repository's docstring and in architecture.md that it is an internal provider boundary and not a consumer API; consider renaming to search_candidates() and extending the sweep to any public API returning chunk text."
+    },
+    {
+      "id": "S1-R-18",
+      "severity": "Low",
+      "category": "documentation",
+      "file": "docs/golden-baseline.md",
+      "location": "line 62 (denied candidate count) and lines 35-43 (per-question table rows)",
+      "problem": "Two defects in the baseline record. (1) 'denied candidates observed: 1' is stale: with the S1-R-11 OR matcher the unauthorized control now denies 3 candidates (probe: negative-unauthorized denied=3), and the committed assertion is denied_count >= 1, so nothing caught the drift. (2) Nine rows of the per-question table carry a duplicated Hit cell, so the Result and Rank columns misalign for those rows even though the underlying ranks are correct.",
+      "proposed_fix": "Re-record the denial count from a harness run and repair the table rows; better, generate the table from the harness rather than editing it by hand."
+    },
+    {
+      "id": "S1-R-19",
+      "severity": "Low",
+      "category": "documentation",
+      "file": "result-review.md",
+      "location": "lines 112-113 (and the same count repeated in context.md:48)",
+      "problem": "'109 passed ... exactly the 82 + 24 already-preserved counts combined' is arithmetically wrong (82 + 24 = 106) and contradicts the preserved system-validator record for `python3 -m pytest`, which is 106 passed. 109 is plausible as the post-repair count — the S1-R-01/10/11 repairs added three tests — but it is a worker assertion with no preserved record behind it, presented as if reconciled with the preserved evidence.",
+      "proposed_fix": "Report the post-repair count as an observation made after the repairs, drop the '82 + 24' reconciliation claim, and cite the preserved record (106 passed) for the pre-repair figure."
+    },
+    {
+      "id": "S1-R-20",
+      "severity": "Low",
+      "category": "failure-handling",
+      "file": "src/lee_kb/main.py",
+      "location": "cmd_sync(), lines 262-272 (except clause)",
+      "problem": "cmd_sync catches only ConnectorReadError and RuntimeError. A sqlite3.Error (locked or corrupt database, realistic when two syncs overlap) or a ValueError from sync_item's chunk validation escapes as a traceback rather than the actionable message the rest of the CLI is careful to produce. No data is lost: each item's write is transactional.",
+      "proposed_fix": "Catch sqlite3.Error and ValueError in cmd_sync, report them like the connector errors, and exit non-zero."
+    },
+    {
+      "id": "S1-R-21",
+      "severity": "Low",
+      "category": "robustness",
+      "file": "src/lee_kb/main.py",
+      "location": "_lookup_receipt_ids(), lines 302-312",
+      "problem": "Receipt IDs are recovered by taking the last N rows of list_receipts() and zipping them positionally against the bundle's evidence. The comment states the assumption honestly, but any concurrent retrieval against the same database file — a second lee-kb search, or the Phase 2 MCP surface — interleaves rows and prints receipt numbers belonging to another query.",
+      "proposed_fix": "Have governance.retrieve() surface the receipt IDs that record_receipt already returns, instead of inferring them from insertion order."
+    },
+    {
+      "id": "S1-R-22",
+      "severity": "Low",
+      "category": "fragility",
+      "file": "src/lee_kb/repository.py",
+      "location": "search() projection lines 628-652 and _item_from_row() lines 715-749",
+      "problem": "The search() projection selects c.* and the item columns it needs, but not i.project, so _item_from_row() reconstructs the item's project from the chunk's project column. The two agree only because _validate_chunks enforces equality at write time (lines 386-387). Any future write path that bypasses that check silently mislabels the item project — the same field EvidenceBundle uses to enforce scope (contracts.py:657-663).",
+      "proposed_fix": "Select i.project AS item_project and read it explicitly in _item_from_row, keeping the chunk's own project for the chunk."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall -q src/lee_kb",
+      "executed_by": "reviewer",
+      "exit_code": 0,
+      "summary": "Every module under src/lee_kb compiles."
+    },
+    {
+      "command": "python3 .agent-orch-scratch/7a1ad8d16fdf/step_10_independent_review/attempt-1/probe_baseline.py",
+      "executed_by": "reviewer",
+      "exit_code": 0,
+      "summary": "Reviewer-authored probe that rebuilds the golden projection independently (same roots, chunker, and governed retrieve() as the committed harness) and recomputes the baseline: hit-at-10 20/20 (100.0%), hit-at-1 12/20 (60.0%), MRR 0.766, per-question ranks identical to docs/golden-baseline.md. Negative controls: no-evidence 0 evidence/0 receipts/0 denied; out-of-scope 0/0/0; unauthorized 0 evidence/0 receipts/3 denied (the document records 1 — finding S1-R-18)."
+    },
+    {
+      "command": "python3 .agent-orch-scratch/7a1ad8d16fdf/step_10_independent_review/attempt-1/probe_invariants.py",
+      "executed_by": "reviewer",
+      "exit_code": 0,
+      "summary": "Reviewer-authored invariant probes. A: symlinked root via a directly-built RootConfig — discover() returns the object, fetch() raises 'source_object_id escapes its root', resolving the root first makes fetch() succeed (S1-R-14). B: fail_on_stale=True raises StaleEvidenceError with 1 receipt already persisted (S1-R-13). C: allow_refresh=True yields freshness.refreshed=False. D: a denied principal gets 0 evidence and denied_count=1 from the governed path while repository.search() returns the chunk text with no principal and leaves 0 receipts (S1-R-12, S1-R-17). E: _fts_query OR-expansion samples. F: tombstone removes evidence from governed search (1 -> 0), include_tombstoned=True still returns it, journal [created(1), deleted(2)], and the earlier receipt still resolves."
+    },
+    {
+      "command": "python3 -m pytest",
+      "executed_by": "system_validator",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record from step S1-07 full verification, summarized here and not re-executed by this step (validator rerun is not permitted): 106 passed in 5.39s."
+    },
+    {
+      "command": "python3 -m pytest tests/golden/",
+      "executed_by": "system_validator",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record for the golden corpus step, not re-executed: 24 passed in 1.98s."
+    },
+    {
+      "command": "python3 -m pytest tests/test_governance.py tests/test_retrieval.py",
+      "executed_by": "system_validator",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record for the governance/receipts step, not re-executed: 12 passed."
+    },
+    {
+      "command": "python3 -m pytest tests/test_local_connector.py tests/test_repository.py",
+      "executed_by": "system_validator",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record for the local-file connector step, not re-executed: 10 passed."
+    },
+    {
+      "command": "python3 -m pytest tests/test_retrieval.py tests/test_local_connector.py",
+      "executed_by": "system_validator",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record for the chunking/lexical step, not re-executed: 12 passed."
+    },
+    {
+      "command": "python3 -m pytest tests/test_repository.py tests/test_contracts.py",
+      "executed_by": "system_validator",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record for the SQLite repository step, not re-executed: 54 passed."
+    },
+    {
+      "command": "BLACK_NUM_WORKERS=1 python3 -m black --check src tests",
+      "executed_by": "system_validator",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record, not re-executed: 'All done!' with 18 files left unchanged."
+    },
+    {
+      "command": "python3 -m ruff check src tests",
+      "executed_by": "system_validator",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record, not re-executed: 'All checks passed!'."
+    },
+    {
+      "command": "env PYTHONPATH=src python3 -m lee_kb.main --help",
+      "executed_by": "system_validator",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record, not re-executed: prints the init/sync/search usage."
+    },
+    {
+      "command": "env PYTHONPATH=src python3 -c \"from lee_kb import contracts\"",
+      "executed_by": "system_validator",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record (recorded twice, both exit 0), not re-executed: the contracts module imports cleanly with no output."
+    }
+  ],
+  "lenses": {
+    "correctness_and_failure_handling": {
+      "finding_ids": ["S1-R-14", "S1-R-20", "S1-R-21", "S1-R-22"],
+      "justification": "Change detection, cursors, and persistence are idempotent: sync_item journals only on a real hash change, cursors advance inside the same transaction as the content they describe, a repeated sync writes no journal rows, and a partial failure leaves the cursor behind the failure rather than ahead of it. The failures I found are at the edges — a root path that is resolved on one code path and not the other, and CLI error handling that does not cover sqlite3 or ValueError."
+    },
+    "governance_and_security": {
+      "finding_ids": ["S1-R-12", "S1-R-13", "S1-R-17"],
+      "justification": "Authorization is fail-closed, precedes evidence assembly, and is the only path to an EvidenceBundle; no unauthorized evidence reaches a caller in any probe I ran, and retrieval grants no execution authority. What is incomplete is the audit trail rather than the enforcement: refusals leave nothing durable, a stale-refused retrieval leaves receipts that overstate what was released, and the raw provider search remains a public content path that the regression sweep cannot see."
+    },
+    "retrieval_quality": {
+      "finding_ids": ["S1-R-16", "S1-R-18"],
+      "justification": "Providers stay replaceable — PermissionEvaluator, Repository, and the connector contract are ABCs, RetrieverRank and fused_rank are carried from day one so fusion can be added without a schema change, and evidence is cited, ordered, and deduplicated by chunk identity. Ranking itself is deterministic and reproduces the recorded baseline exactly. The weakness is that the rank-quality numbers guarding future semantic adoption are neither asserted by a test nor fully in sync with the harness."
+    },
+    "tests_and_documentation": {
+      "finding_ids": ["S1-R-16", "S1-R-19", "S1-R-18"],
+      "justification": "Coverage of the required scenarios is real: happy path, repeated sync, changed source, deleted source, denied evidence, missing principal, empty input, default-deny matching, symlink escape at discovery, unfetchable object mid-pass, and actionable CLI errors. README, sprint memory, and architecture describe delivered behavior, and both deferrals are labelled as deferred rather than done. The defects are numeric: a test count that contradicts the preserved validator record and two stale figures in the baseline document."
+    },
+    "scope_and_dependencies": {
+      "finding_ids": ["S1-R-15"],
+      "justification": "The delivered slice matches the Sprint 1 scope in context.md with no drift: stdlib only, no new runtime dependency, no enterprise infrastructure, office formats and the curated benchmark explicitly deferred with the contract left ready for them. The one scope-adjacent defect is the declared Python floor, which promises an interpreter version the code cannot run on."
+    }
+  },
+  "gate": {
+    "policy": "Critical or High findings fail the gate.",
+    "critical_count": 0,
+    "high_count": 0,
+    "medium_count": 5,
+    "low_count": 6,
+    "result": "pass",
+    "note": "The severity gate passes. The commissioning recommendation is nonetheless conditional ('Ready after specific follow-up') because six readiness criteria are recorded verified_false: durable_audit_record_for_denied_or_empty_retrievals, receipts_record_only_evidence_actually_released, declared_python_support_matches_the_code, golden_baseline_metrics_are_regression_guarded, connector_discovery_and_fetch_agree_on_containment, and all_public_content_returning_apis_are_governed."
+  },
+  "platform_attestations_not_certified_here": "Execution identity, executed route, validator authority, semantic-judge execution, and evidence-chain status are platform-owned and produced after this step returns; this verdict does not certify them. The packet's pre-invocation evidence-chain snapshot is ok=true and is not the terminal attestation."
+}

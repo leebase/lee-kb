@@ -7,7 +7,7 @@
 
 | Attribute | Value |
 |-----------|-------|
-| **Phase** | Phase 0 — Product and Architecture Alignment |
+| **Phase** | Phase 1 — Sprint 1 Personal Foundation delivered |
 | **Mode** | 2 (Collaborative implementation with approval) |
 | **Last Updated** | 2026-08-03 |
 
@@ -15,16 +15,40 @@
 
 | Sprint | Status | Completion |
 |--------|--------|------------|
-| Sprint 1 — Personal Foundation | 🟡 Ready for implementation | 1 planning task complete; 0% product functionality |
+| Sprint 1 — Personal Foundation | 🟢 Delivered | 7/7 sprint tasks complete for the scoped slice; office formats and the curated golden benchmark explicitly deferred |
+| Sprint 2 — Real-Corpus Parity & Post-Parity Repairs | 🟡 In progress | Real-corpus parity measured (P1); review-surfaced repairs S2-R-04, S2-R-03, S1-R-16 complete and re-verified; office-format dependency approval, the OR-matcher decision, and the curated golden benchmark remain open |
 
 ## What's Happening Now
 
 ### Current Work Stream
 
-The project is aligned around the governed knowledge fabric defined in
-`product-definition.md` and `architecture.md`. The next implementation target
-is one end-to-end personal retrieval path: local documents → normalized items
-and chunks → SQLite → lexical evidence with citations, freshness, and receipts.
+Sprint 1 delivered one governed retrieval path: local documents on disk
+synchronize into a normalized SQLite projection and are searchable through
+lexical retrieval, with permission filtering, citations, freshness, and
+retrieval receipts on every result. Full verification (`pytest`, `black
+--check`, `ruff check`) is green. Following delivery, lee-kb was synchronized
+and queried against the real deployed
+`ai-employee-factory/knowledge/sources.toml` corpus (15 roots, ~1,200
+documents) for the first time (see
+`evidence/real-corpus-parity-report.md`), resolving Open Question 4. That
+measurement sized the office-format gap precisely (39 files: 32 `.docx`, 5
+`.xlsx`, 2 `.pptx`, invisible to the connector's own sync summary because
+every root's deployed `include` patterns are markdown-only) and produced a
+first real-corpus performance and retrieval-quality baseline. An independent
+review of that measurement (`code-reviews/review-sprint-2-p1-real-corpus.md`,
+verdict `pass`) surfaced correctness and performance findings against the
+code it exercised; three (S2-R-04 nested/overlapping-root correctness,
+S2-R-03 single-discovery-pass performance, S1-R-16 golden-baseline-as-
+contract) are now repaired and re-verified, and the corpus was re-measured
+post-repair (see `evidence/real-corpus-parity-report.md`): sync wall-clock
+dropped 46.6% (5:20.37 → 2:51.18) with corpus shape and chunk counts
+unchanged. Full verification (`pytest`, `black --check`, `ruff check`) is
+green. The Next Actions Queue below is re-ranked accordingly; the highest
+priority is still approving office-format parsing dependencies together with
+extending the affected roots' `include` patterns, since the real corpus
+proved both are required and neither alone closes the gap — that approval,
+the OR-matcher decision, and the curated golden benchmark all remain open,
+pending Lee.
 
 ### Recently Completed
 
@@ -35,11 +59,33 @@ and chunks → SQLite → lexical evidence with citations, freshness, and receip
 - ✅ Bootstrap CLI metadata and behavior now describe the governed retrieval product.
 - ✅ Bootstrap smoke tests pass and generated local metadata is ignored.
 - ✅ Public GitHub repository created at `https://github.com/leebase/lee-kb` with `main` as the default branch.
+- ✅ S1-01: Normalized domain contracts defined in `src/lee_kb/contracts.py` and `docs/sprint-1-contracts.md`.
+- ✅ S1-02: Local-file connector (`src/lee_kb/connectors/local_files.py`) reads `sources.toml`-compatible config; discovery, change detection, fetch, permissions, and checkpointing implemented and tested.
+- ✅ S1-03: SQLite repository (`src/lee_kb/repository.py`) persists items, chunks, permissions, sync state, and an append-only journal transactionally, with a stored schema version.
+- ✅ S1-04: Deterministic chunking (`src/lee_kb/chunking.py`) and BM25 lexical retrieval (`src/lee_kb/retrieval.py`).
+- ✅ S1-05: Governed `retrieve()` (`src/lee_kb/governance.py`): fail-closed authorization, freshness reporting, and one persisted receipt per evidence item.
+- ✅ S1-06: Golden evaluation harness (`tests/golden/`, `docs/golden-baseline.md`) runs a 20-question generated corpus plus 3 negative controls and records a lexical baseline over paraphrase questions (60.0% hit-at-1, 100% hit-at-10, 0.766 MRR; re-recorded after S1-R-11). Proves the harness, not the curated Chief-of-Staff benchmark.
+- ✅ Independent review PASSED (verdict gate clean): three High findings (S1-R-01 ungoverned retrieve, S1-R-10 connector containment/resilience, S1-R-11 AND-matcher baseline inflation) were found, repaired, and re-verified across three review cycles; 11 advisory findings (5 Medium, 6 Low) remain in `code-reviews/review-sprint-1-personal-foundation.md` as follow-on candidates.
+- ✅ S1-07: `lee-kb init`/`sync`/`search` CLI (`src/lee_kb/main.py`) implemented and exercised end to end; full test suite (109 tests, including the golden corpus) passes; `black --check` and `ruff check` pass on `src` and `tests`.
+- ✅ Real-corpus parity measurement: `lee-kb sync`/`search` run against the actual deployed `ai-employee-factory/knowledge/sources.toml` (15 roots, ~1,200 documents) for the first time, resolving Open Question 4. Findings recorded in `evidence/real-corpus-parity-report.md`: 1,213 live items / 12,699 chunks synced cleanly (zero fetch failures, all 13 canonical overrides took effect correctly); the office-format gap is real and now sized at 39 files (32 `.docx`, 5 `.xlsx`, 2 `.pptx`), invisible to the sync summary because every root's `include` patterns are markdown-only; OR-matcher worst case measured at ~1.521s on this corpus size; 8/10 category queries returned the correct top citation, 2 returned a topically-adjacent but non-canonical document (a BM25 ranking limitation, not a discovery defect); sync baseline recorded at 5:20.37 wall-clock, ~4.48 GiB peak RSS. Office-format handlers remain unregistered pending dependency approval — no change to that deferral.
+- ✅ This step: full verification re-confirmed green (`black --check` and `ruff check` run clean with no fixes needed; `pytest tests/` and `sync --help` reconfirmed via preserved validator evidence from this run, not rerun). `README.md` updated to document the previously-undocumented `--workspace-root` and `--database` flags on `lee-kb sync`.
+- ✅ Independent review of the real-corpus parity slice (`code-reviews/review-sprint-2-p1-real-corpus.md`, verdict `pass`) found no Critical or High finding; three findings from it are now repaired (below).
+- ✅ S2-R-04 (nested/overlapping-root correctness): `LocalFilesConnector` now claims each overlapping file with exactly one root — the deepest matching resolved root, ties broken by root name (`_claiming_root`, `_find_nested_roots` in `src/lee_kb/connectors/local_files.py`); `health()` reports detected nested-root pairs; a parent-repository ignore rule that would otherwise suppress an entire configured root is now surfaced as unresolved rather than silently dropping the root. Regression tests added to `tests/test_local_connector.py`.
+- ✅ S2-R-03 (single discovery pass per sync): `_sync_connector` (`src/lee_kb/main.py`) now calls `connector.discover_report()` once and derives its change list from that report, instead of running a full discovery-and-hash pass twice per sync. Re-measured on the real corpus: wall-clock 5:20.37 → 2:51.18 (−46.6%), user time −47.8%, peak RSS unchanged within noise (−0.4%); document/chunk totals unchanged (1,213 / 12,699). See `evidence/real-corpus-parity-report.md` Performance.
+- ✅ S1-R-16 (golden baseline enforced as a contract): `tests/golden/test_golden_corpus.py::test_recorded_baseline_metrics_are_enforced_by_the_harness` computes hit-at-1/hit-at-10/MRR through the governed `retrieve()` surface and fails (tolerance 0.01, symmetric) if they drift from the recorded gate in `docs/golden-baseline.md` in either direction.
+- ✅ This step: full verification driven green. `pytest` was not rerun (validator rerun not permitted for this step; see `result-review.md` for the four preserved validator records this reports from, all exit 0, tied to S2-R-04, S2-R-03, S1-R-16, and the post-repair real-corpus re-measurement). `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` and `python3 -m ruff check src tests tools` were run fresh: both initially failed (2 files needed `black` reformatting; a resulting `ruff` line-length finding was fixed by hand); both are clean as of this step, no behavioral change.
 
 ### In Progress
 
-- ⏳ Define the first vertical slice's domain contracts and acceptance tests.
-- ⏳ Select the second connector after the local-file connector.
+- None. Sprint 1 is closed for the scoped slice; see Next Actions Queue for follow-on work.
+
+### Recently Decided (2026-08-03 architecture review)
+
+- ✅ Architecture review completed: identity, journal, deletion, migration, retrieve() contract, surfaces, sync, config, evaluation, and projects all locked (see Decisions Locked).
+- ✅ Second connector selected: email, Outlook/Microsoft 365 first, Gmail as early follow-on.
+- ✅ Derived artifacts, ranking signals, retrieval surfaces, and projects added to `architecture.md` and `product-definition.md`.
+- ✅ v1 reframed as a reimplementation of the Employee Zero knowledge system (~1,200 documents, 15 source roots) with the parity acceptance criterion: the Chief of Staff switches off the old `kb` commands without losing capability.
+- ✅ Identity consumed from the Agent Board model; principal required on every retrieval; fail-closed.
 
 ## Decisions Locked
 
@@ -50,6 +96,27 @@ and chunks → SQLite → lexical evidence with citations, freshness, and receip
 | Connectors feed a normalized knowledge projection | Gives every source the same retrieval and governance path | 2026-08-03 |
 | Permission filtering precedes evidence delivery | Prevents unauthorized source content from reaching an AI model | 2026-08-03 |
 | Lexical retrieval comes before semantic retrieval | Validates the core evidence path with fewer moving parts | 2026-08-03 |
+| lee-kb is a platform, not an Agent-Orch subsystem | Consumers depend on lee-kb, lee-kb depends on connectors — never the reverse | 2026-08-03 |
+| Identity: item = (connector, source_object); chunk = (item, ordinal, content_hash) | Receipts store item ID + chunk ID + hash + locator + timestamp, so they stay verifiable after the projection evolves | 2026-08-03 |
+| Latest-state projection plus append-only sync journal | Answers "what changed" questions without full document versioning | 2026-08-03 |
+| Deletion = tombstone by default, purge as optional policy | Receipts stay resolvable; clients configure governance-driven purge later | 2026-08-03 |
+| Stored schema version + migration framework; wipe-and-resync is the v1 upgrade path | The projection is disposable; sources are authoritative | 2026-08-03 |
+| retrieve() contract: query, principal, top_k, filters, freshness, project | Filters are simple equality/range on connector, project, date, type, tags — no query language | 2026-08-03 |
+| Library is the product; CLI is the v1 surface; MCP server is Phase 2 | All surfaces exercise the same public retrieval API | 2026-08-03 |
+| Sync is user-driven (`lee-kb sync [...]`); daemons and watchers deferred | Freshness reporting makes staleness visible instead | 2026-08-03 |
+| Configuration is a public contract at `~/.config/lee-kb/config.toml` | Client deployments will depend on it; documented from day one | 2026-08-03 |
+| Golden evaluation corpus (~20 real questions) is a Sprint 1 deliverable | Semantic retrieval must measurably beat the lexical baseline before adoption | 2026-08-03 |
+| project field is required on every knowledge item; v1 uses `default` | Forces the tenancy/scoping boundary into the data model from day one at near-zero cost | 2026-08-03 |
+| Second connector is email, not GitHub | Broader product value: conversational knowledge, threading, distillation; every customer has email | 2026-08-03 |
+| Email provider order: Outlook/Microsoft 365 first, Gmail as early follow-on | Personal deployment and expected customer deployments live in the Microsoft ecosystem | 2026-08-03 |
+| v1 is a reimplementation of the Employee Zero knowledge system, not a greenfield product | Preserve the `knowledge/sources.toml` source roots and rebuild the projection; the old `.kb/index.sqlite` is not authoritative | 2026-08-03 |
+| v1 file formats: Markdown, plain text, .docx, .xlsx, .pptx | Support the formats the deployed Chief of Staff workflow actually uses | 2026-08-03 |
+| Identity reuses the Agent Board model; retrieval always requires a principal | One identity system for humans, machine identities, and AI employees; CLI defaults to Lee; evaluation is fail-closed | 2026-08-03 |
+| Golden corpus = ~20 real Chief of Staff questions plus negative cases | Measures correct evidence, citations, project scoping, and freshness — not plausible-looking text | 2026-08-03 |
+| v1 complete = the Chief of Staff can switch from the old `kb` commands to lee-kb without losing capability | Objective acceptance criterion; prevents drift into architecture astronautics | 2026-08-03 |
+| Identity-provider independence: Agent Board identities reused via adapter; the personal `lee` principal never requires Agent Board at runtime | Governance compatibility without a hard runtime dependency for personal deployments | 2026-08-03 |
+| Office formats are deferred implementation, not deferred contract | .docx/.xlsx/.pptx stay required v1 scope and parity requirements; contracts and handler registry must support them without redesign | 2026-08-03 |
+| Generated corpus proves the evaluation framework only | The curated golden benchmark completes only with Lee's real Chief of Staff questions against Employee Zero sources | 2026-08-03 |
 
 ## Document Inventory
 
@@ -61,6 +128,9 @@ and chunks → SQLite → lexical evidence with citations, freshness, and receip
 | `architecture.md` | Layers, data flow, and provider boundaries | ✅ Source of truth |
 | `research/` | Research inputs and patterns to evaluate | ✅ Available |
 | `project-plan.md` | Long-term phases and metrics | ✅ Aligned |
+| `docs/sprint-1-contracts.md` | Field-by-field domain contract specification | ✅ Available |
+| `docs/golden-baseline.md` | Golden evaluation corpus method and recorded lexical baseline | ✅ Available |
+| `evidence/real-corpus-parity-report.md` | Measured findings from syncing/querying the real deployed Employee Zero corpus | ✅ Available |
 
 ### Session memory
 
@@ -82,21 +152,33 @@ and chunks → SQLite → lexical evidence with citations, freshness, and receip
 
 ## Open Questions
 
-1. Which connector should follow local files: Outlook, GitHub, or another source?
-2. Which local document formats and filesystem roots belong in the personal release?
-3. Should the first user surface be a CLI, a library API, or both?
-4. What permission representation is sufficient for the single-user release while remaining extensible?
-5. What fields are required in the first retrieval receipt?
+1. Which Employee Zero workflow capabilities are in lee-kb's parity scope? KB freshness check, rebuild, FAQ loading, and search clearly are; live mission status and dossier validation may belong to consumers or a future Agent-Orch connector rather than the retrieval platform.
+2. Which parsing libraries are approved for .docx/.xlsx/.pptx? Now sized precisely: 39 files (32 `.docx`, 5 `.xlsx`, 2 `.pptx`) sit inside the 15 real configured root paths, concentrated in `ai-employee-book` (21 `.docx`) and `tviq` (9 files); ten of the 15 roots have zero office-format files. Office formats require new runtime dependencies, which need explicit approval per project constraints, **and** the affected roots' `include` patterns must be extended — approving dependencies alone will not surface these files. The contracts and format-handler registry already support adding handlers without redesign.
+3. Where does the Agent Board identity model live today, and what does lee-kb consume — a library, a service, or a shared schema? (Not blocking for the personal `lee` principal, which runs with no Agent Board dependency; relevant once a second principal or consumer needs identity.)
+4. ~~Does this checkout have access to the real `knowledge/sources.toml`...~~ **Resolved 2026-08-03**: yes. All 15 configured roots resolved to real, present directories; a full clean sync produced 1,213 live items / 12,699 chunks, closely tracking the `research/employee-zero-kb-reference.md` snapshot (1,209 documents / 12,634 chunks). See `evidence/real-corpus-parity-report.md`.
+5. Is the OR-matcher's measured worst case (~1.521s for a single ubiquitous token, on the current ~1,213-document corpus) acceptable as-is, or does it need a page-size cap / early-exit heuristic before corpus size grows further via office-format ingestion? Still open: the S2-R-03 sync-performance repair improved *sync* wall-clock, not *retrieval* latency, and this figure was carried forward unchanged, not re-measured, in the post-repair run. (See `evidence/real-corpus-parity-report.md` Performance and Recommended Next Actions.)
 
 ## Next Actions Queue
 
+Re-ranked 2026-08-03 after S2-R-04 (nested/overlapping-root correctness),
+S2-R-03 (single-discovery-pass performance), and S1-R-16 (baseline-as-
+contract) were repaired and re-verified (see `result-review.md` and
+`evidence/real-corpus-parity-report.md`). Those three items are dropped from
+the queue below, having been completed; everything else shifts up one rank.
+Office-format dependency approval remains the top blocker, unchanged by this
+step's repairs.
+
 | Rank | Action | Owner | Done When |
 |------|--------|-------|-----------|
-| 1 | Define source, knowledge-item, chunk, evidence, and receipt contracts | Human + Builder | Contracts and tests are reviewed and documented |
-| 2 | Implement the local-file connector and SQLite repository | Builder | A changed file is incrementally synchronized and queryable |
-| 3 | Add deterministic chunking and lexical retrieval | Builder | Exact-token queries return ranked chunks |
-| 4 | Add provenance, permission checks, freshness, and retrieval receipts | Builder | Every result is filtered and auditable |
-| 5 | Choose and implement the second connector | Human + Planner | Connector is explicitly approved and scoped |
+| 1 | Approve `.docx`/`.xlsx`/`.pptx` parsing libraries, register format handlers, **and** extend the `include` patterns on the affected roots (real corpus measurement: 39 files, concentrated in `ai-employee-book` and `tviq` — parity is impossible without both dependency approval and the pattern change) | Human approval + Builder | Dependencies approved and added; `FORMAT_HANDLERS` covers office formats; affected roots' `include` patterns updated; unhandled include-matched files are reported, not silently invisible; tests added |
+| 2 | Fix S1-R-14: `discover()` and `_resolve()` must share one resolved root base (correctness; distinct from the now-repaired S2-R-04 nested-root claiming logic — this is about `discover()`'s containment check using `root.path.resolve()` while `_resolve()` uses unresolved `root.path`; fix before office-format ingestion touches more root paths or any customer deployment) | Builder | A directly built `RootConfig` over a symlinked root discovers and fetches consistently; regression test added |
+| 3 | Decide whether the OR-matcher's measured ~1.521s worst case (Open Question 5) is acceptable as-is or needs a page-size cap / early-exit heuristic before corpus size grows via office-format ingestion | Human + Builder | Decision recorded in `architecture.md` or a backlog item; if a heuristic is chosen, implemented and re-measured against the real corpus |
+| 4 | Curate the real golden benchmark from Lee's recurring Chief of Staff questions, using the two ranking edge cases surfaced by the real-corpus measurement (one job-search, one knowledge-discovery query, each topically-adjacent-but-non-canonical) as concrete starting material | Human + Builder | `docs/golden-baseline.md` reports results against the curated corpus |
+| 5 | File the Agent-Orch defect: continuation runs record `launch: null`, making crashed continuations unresumable | Human + Platform | Backlog item exists in agent-orch with the OS1-contract reference |
+| 6 | Implement the Outlook/Microsoft 365 email connector | Human + Planner | Connector scoped, approved, and implemented against the `Connector` contract |
+| 7 | Resolve Open Question 1 (Employee Zero parity scope for live mission status and dossier validation) | Human + Planner | Parity scope decision recorded in `architecture.md` or `product-definition.md` |
+
+Also open, advisory (not ranked — lower severity, from the same review): S2-R-05 through S2-R-11 in `code-reviews/review-sprint-2-p1-real-corpus.md` (docstring/partition-accuracy fixes, two narrative-count corrections in the evidence report, a commit-message traceability gap, a stale test-count reference, a `ruff` config deprecation, and two missing regression tests).
 
 ## Working Conventions
 
@@ -117,7 +199,8 @@ and chunks → SQLite → lexical evidence with citations, freshness, and receip
 
 ## Environment Notes
 
-- **Working Directory:** `/Volumes/lee-linux-projects/lee-kb`
+- **Working Directory:** a local checkout of this repository (path intentionally
+  not recorded — this repository is public; see S2-R-01, S2-R-02, S2-R-12)
 - **Project Name:** `lee-kb`
 - **Profile:** Python package / governed retrieval service
 - **Author:** Lee Harrington
