@@ -13,7 +13,7 @@ Configuration shape::
     schema = 1
 
     [roots.notes]
-    path = "/home/lee/notes"
+    path = "/path/to/your/notes"
     owner = "lee@leebase.com"
     include = ["*.md", "*.txt"]
     exclude = [".git/**", "tmp/**"]
