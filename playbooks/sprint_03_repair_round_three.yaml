@@ -1,0 +1,251 @@
+{
+  "playbook_id": "sprint_03_repair_round_three",
+  "name": "Sprint 3 repair round three - require positive contradiction, not mere difference",
+  "authoring_notes": [
+    "Round three. The finding trend is converging: 3 High -> 3 High -> 1 High. Round two fixed the missed-contradiction direction (S3-R-10) but over-corrected into the opposite failure: mere DIFFERENCE between two statements is now reported as conflict.",
+    "S3-R-15: the re-review measured this as a controlled A/B against a git archive of the pre-repair tree -- 5 of 6 agreeing pairs now emit a false Conflict, against 1 of 6 before. 'The platform team owns the Perseus runbook.' versus 'The Perseus runbook is owned by the platform team.' is reported as competing because 'owns' != 'owned'.",
+    "THIS ROUND MUST BE VALIDATED IN BOTH DIRECTIONS. A fix that only reduces false conflicts and silently reintroduces the merge-a-contradiction failure is a regression, and vice versa. The step therefore requires a two-sided fixture set and an explicitly measured false-positive rate.",
+    "Standing context for the approval decision: lexical contradiction detection is what makes this hard. 'owns' versus 'owned' and 'enabled' versus 'turned off' are trivial for a language model and genuinely difficult for term-set comparison. The SynthesisProvider seam exists precisely so an LLM provider can replace this heuristic once a dependency is approved; until then the deterministic path must be conservative and honest about its limits.",
+    "Scope is S3-R-15 and the related S3-R-12 Corvus shape the reviewer notes the same fix closes. All other Medium and Low findings remain follow-on work.",
+    "The dependency guardrail still binds: zero runtime dependencies, no LLM client."
+  ],
+  "defaults": {
+    "worker": "claude_code",
+    "routing": {
+      "primary": {
+        "harness": "claude_code",
+        "model": "sonnet"
+      },
+      "fallback": {
+        "harness": "codex_cli",
+        "model": "gpt-5.6-sol"
+      }
+    },
+    "retry_policy": {
+      "max_attempts": 2,
+      "strategy": "rerun_with_validation_feedback"
+    }
+  },
+  "run_policy": {
+    "on_step_failure": "halt",
+    "require_validation_pass_to_advance": true
+  },
+  "steps": [
+    {
+      "step_id": "step_01_positive_contradiction_signal",
+      "name": "Require a positive contradiction signal, not set inequality (codex)",
+      "routing": {
+        "primary": {
+          "harness": "codex_cli",
+          "model": "gpt-5.6-sol",
+          "effort": "high"
+        }
+      },
+      "mission": "Before writing, read AGENTS.md, code-reviews/review-sprint-3-repair-2.md (finding S3-R-15 is the specification and carries a measured A/B), code-reviews/review-sprint-3-repair.md (for what round two was fixing), docs/answer-architecture.md, src/lee_kb/answer_conflict.py, and src/lee_kb/answer.py. Stdlib only, no runtime dependency.\n\nTHE DEFECT. The structural-divergence branch added in round two emits a Conflict whenever two same-topic statements have a meaningful-term Jaccard of at least 0.5 AND unequal term sets. Set inequality is not disagreement. Measured: 5 of 6 agreeing pairs now emit a false Conflict against 1 of 6 before the repair. Paraphrase ('owns' vs 'owned') and elaboration (a sentence plus a qualifying clause) are both reported as competing.\n\nTHE FIX. Require a POSITIVE contradiction signal rather than mere difference. (a) Treat a strict superset of meaningful terms as ELABORATION, not divergence, and apply the same superset rule to the value-word comparison -- the reviewer notes this also closes the pre-existing S3-R-12 Corvus shape. (b) Normalize light morphology (owns/owned, list/listed, retains/retained) before comparing term sets, so a paraphrase is not read as a disagreement; the existing synonym-set structure is the right place for this. (c) Keep a conflict signal firing only when there is affirmative evidence of disagreement: diverging value words after superset and morphology normalization, numeric divergence on the same quantity, differing declared authority on the same subject, or explicit supersession wording.\n\nVALIDATE IN BOTH DIRECTIONS -- this is the acceptance criterion for this step, because the last two rounds each fixed one direction and broke the other. Build a two-sided fixture set in tests/answers/: a NON-COMPETING set of at least six pairs that must produce ZERO conflicts (paraphrase by voice, elaboration by added clause, synonym restatement, differing detail level, same fact from two roots, and one pair differing only in formatting); and a CONTRADICTING set of at least five pairs that must EACH produce exactly one Conflict and two separately cited claims (enabled/turned off, permitted/forbidden, a numeric divergence, a canonical-versus-derived disagreement, and one contradiction phrased entirely outside any word list). Assert both sets in the same test module so neither direction can be improved at the other's expense without a visible failure. Do NOT weaken any existing fixture. Address ONLY S3-R-15 and the S3-R-12 shape it closes. Keep all writes within src/lee_kb/ and tests/.",
+      "inputs": [
+        "AGENTS.md",
+        "code-reviews/review-sprint-3-repair-2.md",
+        "code-reviews/review-sprint-3-repair.md",
+        "docs/answer-architecture.md",
+        "src/lee_kb/answer_conflict.py",
+        "src/lee_kb/answer.py",
+        "tests/answers/test_answer_benchmarks.py"
+      ],
+      "allowed_paths": [
+        "src/lee_kb/",
+        "tests/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "src/lee_kb/answer_conflict.py",
+            "type": "text"
+          },
+          {
+            "path": "src/lee_kb/answer_absence.py",
+            "type": "text"
+          },
+          {
+            "path": "src/lee_kb/answer.py",
+            "type": "text"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "src/lee_kb/answer_conflict.py"
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest tests/",
+            "require_collected_tests": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair so conflict requires affirmative evidence of disagreement: supersets are elaboration, morphology is normalized before comparison, and both the non-competing set (zero conflicts) and the contradicting set (one conflict each, two cited claims) pass in the same module. Neither direction may be improved at the other's expense. Keep writes inside src/lee_kb/ and tests/.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_02_verification_and_docs",
+      "name": "Full verification and updated benchmark results (sonnet)",
+      "mission": "Before writing, read AGENTS.md, skills/documentation.md, docs/answer-benchmark-results.md, code-reviews/review-sprint-3-governed-answer.md, context.md, and result-review.md. First drive full verification green: python3 -m pytest, BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools, python3 -m ruff check src tests tools, python3 -m compileall -q src tests tools, python3 tools/check_disclosure.py, and git diff --check. Then update docs/answer-benchmark-results.md to reflect the repaired behavior: the benchmark families now include the three new regression cases, and the Recommendation must be re-evaluated against the repaired system rather than left stale -- it must be exactly one of 'Ready for customer-facing Q&A', 'Ready after specific follow-up', or 'Not ready', with reasoning. Preserve all seven existing headings (Benchmark Cases, Results, Provenance Examples, Confidence Distribution, Conflict Examples, Performance Observations, Recommendation) with those exact texts. Add a conflict example drawn from the NEW same-authority contradiction fixture, since that is the case the previous document could not demonstrate. Then add a result-review.md top entry describing the three repaired findings and update context.md (Recently Completed, Next Actions Queue). State plainly which review findings remain open (the Medium and Low ones) rather than implying the review is fully resolved. PUBLICATION CONSTRAINT: this repository is public -- no absolute host paths, no private corpus content, nothing credential-shaped. Keep all writes within src/, tests/, tools/, docs/, context.md, and result-review.md.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/documentation.md",
+        "docs/answer-benchmark-results.md",
+        "code-reviews/review-sprint-3-governed-answer.md",
+        "context.md",
+        "result-review.md"
+      ],
+      "allowed_paths": [
+        "src/",
+        "tests/",
+        "tools/",
+        "docs/",
+        "context.md",
+        "result-review.md"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "docs/answer-benchmark-results.md",
+            "type": "markdown"
+          },
+          {
+            "path": "result-review.md",
+            "type": "markdown"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "markdown_headings_present",
+            "path": "docs/answer-benchmark-results.md",
+            "headings": [
+              "Benchmark Cases",
+              "Results",
+              "Provenance Examples",
+              "Confidence Distribution",
+              "Conflict Examples",
+              "Performance Observations",
+              "Recommendation"
+            ]
+          }
+        ],
+        "system": [
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m pytest",
+            "require_collected_tests": true
+          },
+          {
+            "type": "command_succeeds",
+            "command": "BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools"
+          },
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m ruff check src tests tools"
+          },
+          {
+            "type": "command_succeeds",
+            "command": "python3 -m compileall -q src tests tools"
+          },
+          {
+            "type": "command_succeeds",
+            "command": "python3 tools/check_disclosure.py"
+          },
+          {
+            "type": "command_succeeds",
+            "command": "git diff --check"
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair whatever blocks full verification and make the benchmark document describe the repaired system, keeping all seven exact headings, adding a conflict example from the new same-authority fixture, and stating which findings remain open. Keep writes inside the named paths.",
+        "after_retries_exhausted": "halt"
+      }
+    },
+    {
+      "step_id": "step_03_independent_rereview_round_three",
+      "name": "Independent re-review of the repaired answer surface (opus)",
+      "routing": {
+        "primary": {
+          "harness": "claude_code",
+          "model": "opus"
+        }
+      },
+      "mission": "Before writing, read AGENTS.md, skills/code-review.md, agents/reviewer.md, context.md (Decisions Locked), code-reviews/review-sprint-3-governed-answer.md (the prior review -- its three High findings are what this slice claims to repair), docs/answer-architecture.md, docs/answer-benchmark-results.md, and the delivered source and tests. Act as the independent Reviewer.\n\nRe-derive the prior High finding independently AND measure both directions, because the last two rounds each fixed one direction while breaking the other. Construct your own non-competing pairs and your own contradicting pairs, measure the false-conflict rate and the missed-contradiction rate, and report both numbers in Verification. Do NOT accept a fix that merely widens a word list, and do NOT accept a reduction in false conflicts that silently reintroduces merged contradictions: (1) construct two same-authority sources that directly contradict, and prove they now yield a Conflict AND two separately cited claims -- verify BOTH halves of the fix, since the reviewer's own note was that the merge survives even if detection improves; also prove the merge refusal holds when conflict detection is bypassed; (2) construct a corpus where an unrelated absence-shaped sentence coexists with a real multi-source answer, and prove the substantive claims survive; (3) construct three same-topic sources across two authorities and prove no chunk is cited by more than one claim and no merged claim is resurrected. Do not accept the repair on the strength of the new tests alone -- run your own probes.\n\nThen verify the sprint invariants still hold: answer() composes strictly over governance.retrieve(); every substantive claim carries a resolving citation; the three absence states remain distinguishable and an inaccessible result is never reported as NOT_FOUND; confidence is derived rather than asserted; no runtime dependency was added and no LLM client is imported; and no absolute host path, private corpus content, or credential-shaped detail appears in any tracked file (repository-wide scan for the class, not one pattern -- treat any leak as at least a High finding). Confirm the benchmark document's recommendation matches what you actually observe.\n\nBEFORE YOU FINISH: run 'python3 tools/validate_verdict.py code-reviews/review-sprint-3-repair-3.verdict.json' and fix everything it reports. Create BOTH the prose review code-reviews/review-sprint-3-repair-3.md (exact headings Findings, Residual Risks, Verification) AND the verdict code-reviews/review-sprint-3-repair-3.verdict.json conforming to the builtin review_verdict/v1 schema: top level requires verdict, findings, checks_run, and lenses; every finding requires id, severity, file, location, problem, and proposed_fix (the field is 'proposed_fix', NOT 'fix'); every checks_run entry requires command, exit_code, and summary. Residual Risks must state which prior Medium and Low findings remain open, that the LLM synthesis provider is unimplemented pending dependency approval, and that live filesystem verification is deferred. Keep all writes within code-reviews/.",
+      "inputs": [
+        "AGENTS.md",
+        "skills/code-review.md",
+        "agents/reviewer.md",
+        "context.md",
+        "code-reviews/review-sprint-3-repair-2.md",
+        "docs/answer-architecture.md",
+        "docs/answer-benchmark-results.md",
+        "tools/validate_verdict.py"
+      ],
+      "allowed_paths": [
+        "code-reviews/"
+      ],
+      "outputs": {
+        "required": [
+          {
+            "path": "code-reviews/review-sprint-3-repair-3.md",
+            "type": "markdown"
+          },
+          {
+            "path": "code-reviews/review-sprint-3-repair-3.verdict.json",
+            "type": "json"
+          }
+        ]
+      },
+      "validation": {
+        "structural": [
+          {
+            "type": "file_exists",
+            "path": "code-reviews/review-sprint-3-repair-3.md"
+          },
+          {
+            "type": "markdown_headings_present",
+            "path": "code-reviews/review-sprint-3-repair-3.md",
+            "headings": [
+              "Findings",
+              "Residual Risks",
+              "Verification"
+            ]
+          },
+          {
+            "type": "json_schema",
+            "path": "code-reviews/review-sprint-3-repair-3.verdict.json",
+            "schema_path": "builtin:review_verdict/v1"
+          },
+          {
+            "type": "review_verdict_clean",
+            "path": "code-reviews/review-sprint-3-repair-3.verdict.json",
+            "severity_threshold": "High"
+          }
+        ],
+        "system": [
+          {
+            "type": "checks_run_match",
+            "path": "code-reviews/review-sprint-3-repair-3.verdict.json",
+            "timeout_seconds": 300,
+            "advisory": true
+          }
+        ]
+      },
+      "on_fail": {
+        "retry_message": "Repair the review so each prior round-two High finding is independently re-derived with your own constructed probe (both halves of the contradiction fix), the invariant and leak scans are repository-wide, the verdict passes tools/validate_verdict.py, and the required headings and schema fields are present. Keep writes inside code-reviews/.",
+        "after_retries_exhausted": "halt"
+      }
+    }
+  ]
+}

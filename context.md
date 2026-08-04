@@ -17,7 +17,7 @@
 |--------|--------|------------|
 | Sprint 1 — Personal Foundation | 🟢 Delivered | 7/7 sprint tasks complete for the scoped slice; office formats and the curated golden benchmark explicitly deferred |
 | Sprint 2 — Real-Corpus Parity & Post-Parity Repairs | 🟡 In progress | Real-corpus parity measured (P1); review-surfaced repairs S2-R-04, S2-R-03, S1-R-16 complete and re-verified; office-format dependency approval, the OR-matcher decision, and the curated golden benchmark remain open |
-| Sprint 3 — Governed `answer()` Surface | 🟢 Delivered, review repairs in progress | Contracts, evidence selection, absence/conflict identification, `answer()` assembly, the `lee-kb ask` CLI, and permanent regression fixtures for 15 benchmark items across seven families are complete and verified (`docs/answer-benchmark-results.md`); the three High findings from the independent review (S3-R-01, S3-R-02, S3-R-03) are repaired and regression-tested; five Medium/Low findings (S3-R-04, S3-R-05, S3-R-07, S3-R-08, S3-R-09) remain open; the LLM-backed synthesis provider and live filesystem verification of `ask` are explicit deferrals, not gaps |
+| Sprint 3 — Governed `answer()` Surface | 🟢 Delivered, review repairs in progress | Contracts, evidence selection, absence/conflict identification, `answer()` assembly, the `lee-kb ask` CLI, and permanent regression fixtures for 19 benchmark items across seven families are complete and verified (`docs/answer-benchmark-results.md`); five High findings across two review rounds (S3-R-01, S3-R-02, S3-R-03, S3-R-10, S3-R-11) are repaired and regression-tested; one Medium finding (S3-R-12, spurious conflicts between non-competing statements) is newly open from the round-two review; four earlier Medium/Low findings (S3-R-04, S3-R-05, S3-R-07, S3-R-08, S3-R-09) remain open; S3-R-13 (documentation accuracy) and S3-R-14 (disclosure) from the round-two review are repaired; the LLM-backed synthesis provider and live filesystem verification of `ask` are explicit deferrals, not gaps |
 
 ## What's Happening Now
 
@@ -101,6 +101,44 @@ pending Lee.
   byproduct) and a new same-authority Conflict Example. The review's five
   Medium/Low findings (S3-R-04, S3-R-05, S3-R-07, S3-R-08, S3-R-09) are
   **not** addressed by this step and remain open — see Next Actions Queue.
+- ✅ Round-two repair of the governed `answer()` surface
+  (`code-reviews/review-sprint-3-repair.md`, verdict `fail`): a follow-up
+  review proved round one's fixes were shape-specific. **S3-R-10** (a
+  contradiction phrased outside the closed 14-word value-word vocabulary —
+  `"enabled"`/`"turned off"`, `"permitted"`/`"forbidden"`, or a purely
+  numeric divergence — still merged into one self-contradictory
+  `SYNTHESIZED` claim with zero conflicts) — the merge rule in
+  `_assemble_initial_claims` is now inverted to merge only on demonstrated
+  term-equivalence (`_statements_mergeable`) rather than refusing merge only
+  on a known antonym, and `_conflict_signal` gained an explicit
+  numeric-divergence signal. **S3-R-11** (a top-ranked, relevant
+  evidenced-absence statement still replaced the whole answer instead of
+  joining it) — `answer()` now assembles the evidenced-absence claim as an
+  **additional** claim in rank order rather than a replacement, and the
+  top-rank requirement in `classify_absence` was removed as no longer
+  needed. Each fix ships with its own permanent regression fixture (a
+  3-case parametrized out-of-vocabulary/numeric test for S3-R-10, one
+  additive-absence test for S3-R-11), bringing
+  `tests/answers/test_answer_benchmarks.py` to 19 collected items, up from
+  15. Full suite: 245 passed (preserved validator evidence, two independent
+  runs, both exit 0); `black --check`, `ruff check`, `compileall`,
+  `tools/check_disclosure.py`, and `git diff --check` all re-driven fresh and
+  clean, no repairs needed. `docs/answer-benchmark-results.md` rewritten
+  again: the harbor-readiness question's confidence distribution genuinely
+  changed (its two statements no longer merge, so the corpus now yields 11
+  `DIRECTLY_EVIDENCED` claims and 0 `SYNTHESIZED` across family 7, not 9+1),
+  and a new Conflict Example uses the numeric-divergence fixture — the case
+  the round-one document could not demonstrate. One correctness-adjacent
+  finding from the same review, **S3-R-12** (Medium: `_conflict_signal` can
+  report a spurious `Conflict` between non-competing statements, e.g. two
+  sources that agree but one adds information), is confirmed still open and
+  was out of this round's declared scope. The review's own S3-R-13
+  (documentation-accuracy) and S3-R-14 (disclosure, an absolute host path in
+  a test fixture) findings are already repaired — S3-R-14 before this step,
+  S3-R-13 by this step's rewrite qualifying each fixture's guarantee to the
+  shape actually proven. The four earlier Medium/Low findings (S3-R-04,
+  S3-R-05, S3-R-07, S3-R-08, S3-R-09) remain open, unchanged — see Next
+  Actions Queue.
 
 ### In Progress
 
@@ -189,19 +227,21 @@ pending Lee.
 
 ## Next Actions Queue
 
-Re-ranked 2026-08-04 after the three High findings from the Sprint 3 review
-(`code-reviews/review-sprint-3-governed-answer.md`) were repaired and
-verified — see `result-review.md` and `docs/answer-benchmark-results.md`. A
-new item enters the queue for that review's two remaining Medium findings
-(S3-R-04, S3-R-05); everything carried over from Sprint 2 and the earlier
-Sprint 3 delivery is unchanged in scope. Office-format dependency approval
-remains the top blocker.
+Re-ranked 2026-08-04 after five High findings across two Sprint 3 review
+rounds (`code-reviews/review-sprint-3-governed-answer.md`:
+S3-R-01/S3-R-02/S3-R-03; `code-reviews/review-sprint-3-repair.md`:
+S3-R-10/S3-R-11) were repaired and verified — see `result-review.md` and
+`docs/answer-benchmark-results.md`. The round-two review's Medium finding
+S3-R-12 (spurious conflicts between non-competing statements) joins S3-R-04
+and S3-R-05 in the queue; everything carried over from Sprint 2 and the
+earlier Sprint 3 delivery is unchanged in scope. Office-format dependency
+approval remains the top blocker.
 
 | Rank | Action | Owner | Done When |
 |------|--------|-------|-----------|
 | 1 | Approve `.docx`/`.xlsx`/`.pptx` parsing libraries, register format handlers, **and** extend the `include` patterns on the affected roots (real corpus measurement: 39 files, concentrated in `ai-employee-book` and `tviq` — parity is impossible without both dependency approval and the pattern change) | Human approval + Builder | Dependencies approved and added; `FORMAT_HANDLERS` covers office formats; affected roots' `include` patterns updated; unhandled include-matched files are reported, not silently invisible; tests added |
 | 2 | Approve a model-client dependency and implement an LLM-backed `SynthesisProvider` for `lee-kb ask` (Open Question 6); `docs/answer-architecture.md`'s seam is the entire integration point, so this should touch no pipeline code | Human approval + Builder | Dependency approved; a new class implements `SynthesisProvider.narrate()`; registered via `answer(..., synthesis_provider=...)`; `synthesis_provider_id` on the resulting `Answer` identifies it; tests added |
-| 3 | Fix the two remaining Medium findings from the Sprint 3 review: S3-R-04 (`Answer` carries no withheld/truncated signal — add `withheld_count`/`truncated`, populated from the governed bundle, rendered by `cmd_ask`) and S3-R-05 (`cmd_ask` never passes `project_has_synchronized_content`/`corpus_fresh`/`resolution_failed` to `answer()`, so the CLI cannot reach the purpose-built `UNKNOWN` absence branch and reports `NOT_FOUND` instead) | Builder | `Answer` reports withheld/truncated counts; `lee-kb ask` against an unsynchronized project reports `unknown`, not `not_found`; regression tests added for both |
+| 3 | Fix the three remaining Medium findings from the Sprint 3 reviews: S3-R-04 (`Answer` carries no withheld/truncated signal — add `withheld_count`/`truncated`, populated from the governed bundle, rendered by `cmd_ask`), S3-R-05 (`cmd_ask` never passes `project_has_synchronized_content`/`corpus_fresh`/`resolution_failed` to `answer()`, so the CLI cannot reach the purpose-built `UNKNOWN` absence branch and reports `NOT_FOUND` instead), and S3-R-12 (`_conflict_signal`'s value-word and authority branches can report a `Conflict` between statements that do not actually disagree, e.g. two same-authority sources where one adds information to the other) | Builder | `Answer` reports withheld/truncated counts; `lee-kb ask` against an unsynchronized project reports `unknown`, not `not_found`; `_conflict_signal` requires an antonym relationship (or an actual assertion difference) for the value-word branch and near-duplicate predicates for the authority branch; regression tests added for all three |
 | 4 | Fix S1-R-14: `discover()` and `_resolve()` must share one resolved root base (correctness; distinct from the now-repaired S2-R-04 nested-root claiming logic — this is about `discover()`'s containment check using `root.path.resolve()` while `_resolve()` uses unresolved `root.path`; fix before office-format ingestion touches more root paths or any customer deployment) | Builder | A directly built `RootConfig` over a symlinked root discovers and fetches consistently; regression test added |
 | 5 | Decide whether the OR-matcher's measured ~1.521s worst case (Open Question 5) is acceptable as-is or needs a page-size cap / early-exit heuristic before corpus size grows via office-format ingestion | Human + Builder | Decision recorded in `architecture.md` or a backlog item; if a heuristic is chosen, implemented and re-measured against the real corpus |
 | 6 | Curate the real golden benchmark from Lee's recurring Chief of Staff questions, using the two ranking edge cases surfaced by the real-corpus measurement (one job-search, one knowledge-discovery query, each topically-adjacent-but-non-canonical) as concrete starting material, and run it through both `retrieve()` and `answer()` (Open Question 7) | Human + Builder | `docs/golden-baseline.md` reports results against the curated corpus for `retrieve()`; `docs/answer-benchmark-results.md` reports results for `answer()` |
@@ -219,8 +259,13 @@ Examples quote reformatted claim text and undercount claims,
 `docs/answer-architecture.md` misstates the default synthesis provider as
 unconfigured, and `OUTSIDE_REQUESTED_PROJECT` omissions collapse to
 `NOT_RELEVANT` for readers). S3-R-06 (the Confidence Distribution
-double-count) was corrected in this step as a byproduct of rewriting
-`docs/answer-benchmark-results.md` and is no longer open.
+double-count) was corrected as a byproduct of rewriting
+`docs/answer-benchmark-results.md` after round one and is no longer open.
+S3-R-13 (`code-reviews/review-sprint-3-repair.md`: the round-one benchmark
+document overclaimed completeness) is corrected as a byproduct of this
+step's rewrite and is no longer open. S3-R-14 (an absolute host path in
+`tests/test_contracts.py`) was repaired before this step, together with
+`tools/check_disclosure.py`, and is no longer open.
 
 ## Working Conventions
 

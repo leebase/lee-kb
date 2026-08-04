@@ -1,0 +1,312 @@
+{
+  "schema": "review_verdict/v1",
+  "review": "code-reviews/review-sprint-3-repair-2.md",
+  "reviewed_at": "2026-08-04",
+  "step_id": "step_03_independent_rereview_round_two",
+  "subject": "Sprint 3 round-two repair of the governed answer() surface: inverted merge rule, numeric-divergence and structural-divergence conflict signals, additive evidenced absence (working tree against 41476a6)",
+  "verdict": "fail",
+  "recommendation": "Ready after specific follow-up",
+  "summary": "Both prior round-two High findings are independently confirmed repaired, and generally rather than shape-bound. S3-R-10 was re-derived with four constructed same-authority contradiction shapes that reuse no fixture wording, and BOTH halves of the fix hold: each yields exactly one Conflict and two singly-cited claims, and with lee_kb.answer.detect_conflicts neutralized each still yields two unmerged claims, so the merge refusal does not depend on detection. S3-R-11 was re-derived with a control/treatment pair in which a short, same-topic, top-ranked CANONICAL 'does not exist' record joins the answer as its own singly-cited claim while both substantive claims survive with their citations and nothing is demoted to evidence_omitted. Reconciliation, governed exclusivity, citation and receipt closure, absence distinguishability, derived confidence, the dependency boundary and the disclosure surface all survived independent probing repository-wide. One High finding is introduced by this round: the previously undocumented structural-divergence branch in _conflict_signal reports agreement as disagreement whenever two same-topic statements exceed 0.5 meaningful-term Jaccard with unequal term sets. Measured with an identical probe and corpora against the working tree and a git archive HEAD copy of the pre-repair tree, 5 of 6 constructed non-competing pairs now emit a Conflict against 1 of 6 pre-repair; it reaches the project's own benchmark corpus (family 7 harbor readiness, 3 conflicts pre to 4 post, one between a statement and the audit source that says it confirms it) and is user-visible through the shipped lee-kb ask command. A second, Medium documentation finding: docs/answer-benchmark-results.md never names that branch, misattributes two of the three new family-5d fixtures to antonym handling when they actually fire it, and reports the family-7 confidence-distribution change while omitting the conflict-count change on the same question.",
+  "findings": [
+    {
+      "id": "S3-R-15",
+      "severity": "High",
+      "category": "Correctness / honest reporting",
+      "file": "src/lee_kb/answer_conflict.py",
+      "location": "src/lee_kb/answer_conflict.py:259-267 (_conflict_signal structural-divergence branch), :85 _STRUCTURAL_DIVERGENCE_THRESHOLD, :317 _statements_mergeable; user-visible at src/lee_kb/main.py:568-577",
+      "problem": "The branch this round added at the end of _conflict_signal emits \"Competing statements about ... differ in meaningful terms.\" whenever two same-topic statements have a meaningful-term Jaccard of at least 0.5 AND unequal term sets. Set inequality is not disagreement, so mere difference is reported as conflict. Independently measured (probe E: six constructed non-competing pairs, each written to two same-authority source roots, discovered through the real LocalFilesConnector into real SQLite, then the identical probe and corpora re-run against a git archive HEAD (41476a6) copy of the pre-repair tree): 5 of 6 agreeing pairs now emit a Conflict, against 1 of 6 pre-repair. 'The platform team owns the Perseus runbook.' vs 'The Perseus runbook is owned by the platform team.' -- identical meaning, differing only in voice -- is reported as competing, because owns != owned (Jaccard 0.667). So is 'The Halcyon policy retains audit logs.' vs the same sentence plus 'under section 4.', where one side is a strict elaboration of the other (0.625), and 'The Vega ingest queue runs in the north region.' against the same sentence plus a time qualifier (0.667). The defect is reachable from the project's own benchmark fixtures: probe F rebuilds the twelve-document primary corpus and asks the five family-7 questions; 'What does harbor readiness require from the cobalt checklist?' now emits a conflict between the duplicate-repository statement and the independent-audit statement whose own text reads 'The independent audit confirms that harbor readiness requires the cobalt checklist.' Family-7 conflicts go from 3 pre-repair to 4 post-repair on the identical corpus. Reproduced end to end through the shipped CLI: lee-kb sync then lee-kb ask \"Who owns the Perseus runbook?\" prints both agreeing statements as two directly_evidenced claims and then lists them under a Conflicts: heading with 'newer: neither; more authoritative: neither'. The suite cannot catch this: the only negative fixture, tests/test_answer_conflict.py:208, uses a pair at Jaccard 0.4 -- below the 0.5 gate -- so it passes without ever exercising the branch, and no fixture asserts that agreeing statements produce no conflict. Two of the three new family-5d fixtures (enabled-versus-turned-off at exactly 0.500, permitted-versus-forbidden at 0.600) pass through this same undiscriminating branch, not through any antonym test, so they green-light the defect rather than bounding it. Calibration, stated plainly: no claim text is wrong, nothing is suppressed, every citation still resolves, and the failure direction is over-warning rather than under-warning -- on claim-level correctness alone this would be Medium, and the prior review rated its narrower pre-existing form (S3-R-12) Medium. It is filed High because this round widened it fivefold on constructed non-competing pairs, moved it into the benchmark corpus's own published results, and made it user-visible on the only shipped surface: a reader cannot tell which entries under Conflicts: are real disagreements, and a machine consumer filtering on conflicts receives mostly noise.",
+      "proposed_fix": "Require a positive contradiction signal instead of set inequality. (a) Treat a strict superset of meaningful terms as elaboration, not divergence, and apply the same superset rule to _value_words_diverge, which also closes the pre-existing S3-R-12 Corvus shape. (b) Normalize light morphology (owns/owned, list/listed, retains/retained) before comparing term sets, so a paraphrase is not a disagreement -- _KNOWN_SYNONYM_SETS already has the right shape and only needs to stop being a two-entry hand list. (c) Gate the branch on a genuine substitution: both sides must supply distinct fillers for the same slot in an otherwise matching frame (both a number, both a value word, both a proper noun), rather than merely differing. (d) Add permanent regression fixtures for agreeing pairs -- elaboration, voice change, added qualifier -- each asserting result.conflicts == (), and pin the expected conflict count for the family-7 harbor-readiness question, so this class cannot regress silently again. Raising _STRUCTURAL_DIVERGENCE_THRESHOLD alone is not a fix: the Kestrel fixture sits at exactly 0.500 and would break first.",
+      "evidence": "probeE_falsepositive.py run against both trees (5/6 vs 1/6 agreeing pairs flagged; the pre-repair tree additionally MISSES the control contradiction); probeF_benchmark_corpus.py run against both trees (family-7 conflicts 4 post vs 3 pre, claims 11 vs 10); inline probe G branch attribution (Kestrel 0.500 structural, Vega 0.600 structural, Lyra 0.667 numeric, harbor 0.625 structural, elaboration 0.625 structural, voice change 0.667 structural); lee-kb sync + lee-kb ask reproduction, both exit 0."
+    },
+    {
+      "id": "S3-R-16",
+      "severity": "Medium",
+      "category": "Documentation accuracy",
+      "file": "docs/answer-benchmark-results.md",
+      "location": "docs/answer-benchmark-results.md:8-25 (revision summary), :55 (family 5d row), :237-240 (Conflict Examples), :299-312 (Recommendation section 1)",
+      "problem": "The benchmark document describes this round's conflict-detection work as two changes -- inverting the merge rule and adding a numeric-divergence signal -- and never mentions the third, the meaningful-term structural-divergence branch. Probe G measures which branch actually fires for each fixture: the numeric signal fires only for Lyra; Kestrel and Vega both fire the structural branch. The document nonetheless describes those two as reproducing 'the same shape for antonym pairs outside the fixed vocabulary', when the branch that catches them performs no antonym test at all and fires identically on elaboration and voice change. Family 5d's stated guarantee is therefore true as measured but is not evidence of the property the row claims to prove. Separately, the document reports the family-7 behaviour change it likes (10 claims to 11; SYNTHESIZED 9+1 to 11+0 -- probe F reproduces both figures exactly, pre and post) but not the change on the same question that it does not: conflicts 3 to 4. And Recommendation section 1 still presents S3-R-12 as the single narrow remaining conflict defect, scoped to the value-word and authority branches, when a broader one now ships; the closing paragraph's assertion that no confidently-wrong-output defect remains no longer holds. The recommendation value, 'Ready after specific follow-up', matches what I observe; its stated justification does not, and a reader using this document to decide whether to release would understate the open correctness surface.",
+      "proposed_fix": "Name the structural-divergence branch in the revision summary and in the family 5d row, and describe what it actually tests (term-set inequality above a similarity floor), not antonymy. Report the family-7 conflict-count change alongside the confidence-distribution change, since both come from the same repair on the same question. Replace Recommendation section 1 with S3-R-15, noting S3-R-12 as its narrower subset, and drop the closing sentence's implication that no confidently-wrong-output defect remains.",
+      "evidence": "probeF_benchmark_corpus.py against both trees reproduces every figure the document states (11 claims all directly_evidenced, 0 unresolved, post; 9+1=10, pre) and also the unreported conflict delta 3 -> 4; inline probe G attributes each fixture to its firing branch."
+    }
+  ],
+  "prior_findings_confirmed_repaired": [
+    {
+      "id": "S3-R-10",
+      "state": "repaired",
+      "basis": "Probe A: four constructed same-authority two-source corpora in reviewer wording (restricted/unrestricted, Tuesday/Thursday, 6 hours/24 hours, security team/platform team), none reusing the shipped Kestrel/Vega/Lyra/Equinox fixtures. Half one: each yields exactly one Conflict, exactly two claims, each singly cited, one per source root. Half two: with lee_kb.answer.detect_conflicts replaced by a function returning (), all four still yield two separate DIRECTLY_EVIDENCED claims and zero merged claims, so the merge refusal genuinely holds independently of detection -- the specific thing the prior review warned about. Probe E' confirms the delta: the same control contradiction merges into one claim with zero conflicts at HEAD."
+    },
+    {
+      "id": "S3-R-11",
+      "state": "repaired",
+      "basis": "Probe B control/treatment. Control (two CANONICAL quill-standard sources) yields 2 claims. Treatment (identical corpus plus one short same-topic CANONICAL record reading 'The quill publication standard microfiche archive does not exist.') ranks that record FIRST in the governed bundle (it is evidence_used[0]) and yields 3 claims: the absence record as its own singly-cited DIRECTLY_EVIDENCED claim in rank order, plus both substantive claims with their citations intact, and no substantive source demoted to evidence_omitted. A further run confirms an absence-shaped sentence about an unrelated topic is not surfaced at all. The top-rank heuristic removed from classify_absence is genuinely no longer needed."
+    },
+    {
+      "id": "S3-R-03",
+      "state": "still repaired under the new merge rule",
+      "basis": "Probe C: five shapes of three-to-four same-topic sources across two authorities, including one where the agreeing pair is cross-authority and merges first. In every case the maximum number of claims citing any one chunk is 1, no surviving claim asserts both sides, every conflict side is present in result.claims, cited chunks equal used-evidence chunks, and answer() never raises."
+    },
+    {
+      "id": "S3-R-14",
+      "state": "repaired",
+      "basis": "Repository-wide absolute-host-path class scan over all 98 tracked files finds zero hits in src/, tests/ or tools/ other than the documented public config contract ~/.config/lee-kb/config.toml and tools/check_disclosure.py's own pattern literals. The tests/test_contracts.py hit is gone."
+    },
+    {
+      "id": "S3-R-06",
+      "state": "repaired",
+      "basis": "Probe F reproduces the corrected Confidence Distribution exactly: 11 claims across the five family-7 questions, all directly_evidenced, 0 unresolved citations."
+    }
+  ],
+  "prior_findings_still_open": [
+    "S3-R-04 (Medium) -- dataclasses.fields(Answer) carries no withheld/truncated signal; withholding is visible only through Absence.withheld_count, which exists only when the answer has no claims.",
+    "S3-R-05 (Medium) -- cmd_ask (src/lee_kb/main.py:619) still calls compute_answer() with only principal, project and top_k, so the purpose-built UNKNOWN absence branch is unreachable from the only shipped surface.",
+    "S3-R-12 (Medium) -- the value-word branch still reports a Conflict between 'The Corvus sign-off is required.' and 'The Corvus sign-off is required and approved.'; probe E pair P4 reproduces it against both trees. Now the narrower subset of S3-R-15 and should be closed by the same fix.",
+    "S3-R-07 (Low) -- Provenance Examples still quote reformatted, heading-free claim text; probe F measures three claims for the fuzzy-name question where the document shows one.",
+    "S3-R-08 (Low) -- docs/answer-architecture.md:241 still reads 'v1 ships with no provider configured' while answer() defaults to DEFAULT_SYNTHESIS_PROVIDER.",
+    "S3-R-09 (Low) -- answer_evidence.py:111 as_answer_omission still reports OUTSIDE_REQUESTED_PROJECT to the reader as NOT_RELEVANT."
+  ],
+  "residual_risks": [
+    "Prior Medium findings S3-R-04, S3-R-05 and S3-R-12 and prior Low findings S3-R-07, S3-R-08 and S3-R-09 remain open, each verified still open by this review rather than carried forward on assertion.",
+    "The LLM-backed SynthesisProvider is specified but unimplemented, pending dependency approval: answer() ships only DeterministicSynthesisProvider, a standard-library template renderer with no model call, so lee-kb ask returns template prose rather than natural-language synthesis. Verified rather than assumed: pyproject.toml project.dependencies is [], an AST walk over all 31 tracked Python files finds pytest as the only non-stdlib import in the repository, and a 22-term model-client class scan over all 98 tracked files returns exactly one hit in src/tests/tools -- the English word 'requests' in a governance.py error string.",
+    "Live filesystem verification is deferred: every result in this review, in docs/answer-benchmark-results.md and in the delivered suite comes from temporary synthetic projections, including my own probes. Nothing exercises answer() against a live, continuously-synchronized filesystem corpus over time -- freshness drift, resync during use, tombstoning mid-question, concurrent sync are all unmeasured.",
+    "answer() has still never been run against the real ~1,213-document corpus (Open Question 7). S3-R-15 is corpus-shape sensitive in the direction that matters: a real policy corpus contains far more near-duplicate restatements, elaborations and cross-references than fourteen fixtures do, so I expect its false-conflict incidence there to be materially higher than the single instance visible in the benchmark corpus.",
+    "The suite still cannot catch the defect it was written beside: S3-R-15 survives a green 245-test suite and a green 19/19 benchmark run, exactly as S3-R-10 and S3-R-11 survived a green 241-test suite. Each round's fixtures pin the shape the finding was reported against; the round's new behaviour goes unpinned in the opposite direction. Negative fixtures asserting what must NOT be reported are the missing half.",
+    "Two Sprint 1/2 open questions are inherited unchanged: OR-matcher worst-case retrieval latency (~1.521s, Open Question 5) and permission-basis on receipts (Open Question 2), both of which apply to answer() because it calls retrieve() directly."
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m pytest tests/",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 1 (agent_orch.validators.command_succeeds@1), reported not re-executed: passed true, stdout ends '245 passed in 23.04s'. Tied to step_01_invert_merge_and_additive_absence criterion 1, attempt 1.",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "python3 -m pytest tests/",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 2, reported not re-executed: passed true, stdout ends '245 passed in 23.29s'. Tied to step_01_invert_merge_and_additive_absence criterion 1, attempt 2.",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "python3 -m pytest",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 3, reported not re-executed: passed true, stdout ends '245 passed in 24.07s'. Tied to step_02_verification_and_docs criterion 1.",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "python3 -m black --check src tests tools",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 4, reported not re-executed: passed true, stderr 'All done!' / '31 files would be left unchanged.'. Tied to step_02_verification_and_docs criterion 2.",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "python3 -m ruff check src tests tools",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 5, reported not re-executed: passed true, stdout 'All checks passed!'; stderr carries the pre-existing select/ignore to lint.* deprecation warnings. Tied to step_02_verification_and_docs criterion 3.",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "python3 -m compileall -q src tests tools",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 6, reported not re-executed: passed true, no output. Tied to step_02_verification_and_docs criterion 4.",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "python3 tools/check_disclosure.py",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 7, reported not re-executed: passed true, stdout 'check_disclosure: clean - no host paths or credentials in tracked files.'. Tied to step_02_verification_and_docs criterion 5.",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 8, reported not re-executed: passed true, no output. Tied to step_02_verification_and_docs criterion 6.",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "python3 probeA_contradiction.py",
+      "exit_code": 0,
+      "summary": "Reviewer probe A, S3-R-10 both halves. Four constructed same-authority two-source corpora synced through the real connector into real SQLite. Half one: each yields exactly 1 Conflict, 2 claims, each singly cited, one per root. Half two: with lee_kb.answer.detect_conflicts neutralized, each still yields 2 unmerged claims. 'probe A failures: none'.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 probeB_absence.py",
+      "exit_code": 0,
+      "summary": "Reviewer probe B, S3-R-11. Control two CANONICAL sources -> 2 claims. Treatment adds one short same-topic CANONICAL 'does not exist' record; it ranks first in the governed bundle and the answer becomes 3 claims with both substantive claims surviving and nothing demoted to evidence_omitted. An unrelated absence sentence is not surfaced. 7/7 checks pass.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 probeC_reconciliation.py",
+      "exit_code": 0,
+      "summary": "Reviewer probe C, reconciliation under the new merge rule. Five shapes of three-to-four same-topic sources across two authorities, including a cross-authority agreeing pair that merges first: max claims citing any one chunk is 1 in every case, no claim asserts both sides, every conflict side present in result.claims, cited chunks equal used chunks, no raise. 'probe C failures: none'.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 probeD_invariants.py",
+      "exit_code": 0,
+      "summary": "Reviewer probe D, sprint invariants. D1: repository call set during answer() is search (lee_kb.retrieval) then record_receipt x2 (lee_kb.governance), identical to retrieve() alone, zero calls from any lee_kb.answer* module; neutralizing answer.retrieve makes answer() raise, so no fallback path. D2: 0 uncited claims, 0 unresolved citations, receipt_ids == evidence_used union evidence_omitted. D3: denied-only corpus -> INACCESSIBLE withheld_count=1 UNKNOWN and asserted not NOT_FOUND; silence -> NOT_FOUND; unsynchronized project -> UNKNOWN; resolution_failed -> UNKNOWN; four distinct detail strings. D4: no confidence parameter on answer(); confidence tracks evidence shape. 'probe D failures: none'.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 probeE_falsepositive.py <repo>/src",
+      "exit_code": 0,
+      "summary": "Reviewer probe E, post-repair false-positive measurement: 5 of 6 constructed agreeing pairs emit a Conflict (voice change, elaboration, added qualifier, added attribute, inflected paraphrase); the sixth, whose term sets are exactly equal, merges cleanly; the control contradiction is detected.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 probeE_falsepositive.py <scratch>/pre-repair/src",
+      "exit_code": 0,
+      "summary": "Reviewer probe E-prime, identical probe and corpora against a git archive HEAD (41476a6) copy of the pre-repair tree: 1 of 6 agreeing pairs emits a Conflict (the pre-existing S3-R-12 value-word shape), and the control contradiction is MISSED, merging into one claim. Establishes the delta in both directions.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 probeF_benchmark_corpus.py <repo>",
+      "exit_code": 0,
+      "summary": "Reviewer probe F, post-repair: rebuilding the twelve-document primary fixture corpus and asking the five family-7 questions gives 11 claims, all directly_evidenced, 0 synthesized, 0 unresolved citations -- matching docs/answer-benchmark-results.md exactly -- and 4 conflicts, one between the duplicate-repository harbor statement and the independent-audit statement that says it confirms that statement.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 probeF_benchmark_corpus.py <scratch>/pre-repair",
+      "exit_code": 0,
+      "summary": "Reviewer probe F-prime, pre-repair baseline for the same corpus: 10 claims (9 directly_evidenced + 1 synthesized) and 3 conflicts. Confirms both the document's stated confidence-distribution change and the unreported conflict-count change 3 -> 4.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 - (inline probe G: conflict-branch attribution)",
+      "exit_code": 0,
+      "summary": "Reviewer probe G: which _conflict_signal branch fires per fixture. Kestrel jaccard 0.500 -> structural; Vega 0.600 -> structural; Lyra 0.667 -> numeric; harbor-readiness 0.625 -> structural; elaboration 0.625 -> structural; voice change 0.667 -> structural. Basis for S3-R-16 and for the note that raising the threshold is not a fix.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 -m lee_kb.main sync --config <scratch>/clitest/sources.toml",
+      "exit_code": 0,
+      "summary": "Reviewer CLI probe, shipped surface: 'Synced local_files: 2 created, 0 updated, 0 deleted, 0 unchanged'. Two CANONICAL roots holding the voice-change agreeing pair.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 -m lee_kb.main ask \"Who owns the Perseus runbook?\" --config <scratch>/clitest/sources.toml",
+      "exit_code": 0,
+      "summary": "Reviewer CLI probe: S3-R-15 is user-visible on the only shipped surface. Prints both agreeing statements as two directly_evidenced claims, then a 'Conflicts:' section quoting both with 'newer: neither; more authoritative: neither'.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 -m pytest tests/answers/ --collect-only -q",
+      "exit_code": 0,
+      "summary": "'19 tests collected in 0.07s' -- confirms the benchmark suite's claimed item count. Collection only; no test executed, and no preserved validator command was re-run.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 -c '<tomllib read of pyproject.toml>'",
+      "exit_code": 0,
+      "summary": "project.dependencies == []; the only extra is dev = [pytest>=7.0, black>=23.0, ruff>=0.1.0]; build-system requires setuptools>=61.0 and wheel. No runtime dependency was added.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 -c '<AST walk over every tracked *.py, compared against sys.stdlib_module_names>'",
+      "exit_code": 0,
+      "summary": "31 tracked Python files scanned. The complete non-stdlib, non-local import set across the repository is {pytest}, in 13 test files. Nothing else.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "git ls-files -z | xargs -0 grep -InE '<22-term LLM/model-client alternation plus claude-*/gpt-N model-id shapes>'",
+      "exit_code": 0,
+      "summary": "Repository-wide over all 98 tracked files. Exactly one hit in src/, tests/ or tools/, and it is the English word 'requests' in src/lee_kb/governance.py:126's error string. All other hits are playbooks/*.yaml, research/, architecture.md, evidence/ and code-reviews/, none of them product code. No LLM client is imported.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "git ls-files -z | xargs -0 grep -InE '(/home/<u>|/Users/<u>|C:\\\\Users\\\\|/root/<a>|/var/folders/|/private/var/|/mnt/<a>/|/media/<a>/|/opt/<a>/|/srv/<a>/|~/<a>/<b>)'",
+      "exit_code": 0,
+      "summary": "Repository-wide absolute-host-path class scan over all 98 tracked files: zero hits in src/, tests/ or tools/ other than the documented public config contract ~/.config/lee-kb/config.toml and tools/check_disclosure.py's own pattern literals. S3-R-14's tests/test_contracts.py hit is gone; the remaining hits are prior code-reviews/ artifacts quoting it plus README.md, architecture.md, context.md, docs/decisions.md and main.py citing the config contract. No leak in any round-two delivered file.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "git ls-files -z | xargs -0 grep -InE '<credential-shape alternation: api_key, secret_key, client_secret, access/refresh token, Bearer, password=, private key, BEGIN PRIVATE KEY, AKIA, sk-, ghp_, xox[baprs]-, eyJ, Authorization:>'",
+      "exit_code": 0,
+      "summary": "Four hits outside code-reviews/, all the connector's own secret tripwire and its tests: research/employee-zero-kb-reference.md:44 (the rule), src/lee_kb/connectors/local_files.py:158 (the pattern docstring), tests/test_local_connector.py:711 and :713 (assertions exercising it). No credential value anywhere.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "grep -IlE 'ai-employee-factory|ai-employee-book|employee-zero|Employee Zero|tviq|knowledge/sources\\.toml' over git ls-files; plus git ls-files | grep -E '\\.(sqlite|sqlite3|db|env|pem|key|p12|pfx|crt)$|\\.lee-kb|\\.kb/|\\.agent-orch-scratch'",
+      "exit_code": 0,
+      "summary": "28 tracked files reference the corpus by name only (project memory, architecture, playbooks, prior evidence) -- root names and counts, no document content. No .sqlite, .db, .env, .pem, key artefact or scratch directory is tracked.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "git ls-files -z | xargs -0 grep -IohE '<e-mail address pattern>' | sort -u",
+      "exit_code": 0,
+      "summary": "Exactly four distinct values across the repository: anyone@example.com, intern@example.com, someone-else@example.com (test placeholders) and lee@leebase.com (the published owner identity and documented default principal). No third-party address.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "grep -rInE 'import socket|urllib|http\\.client|smtplib|ftplib|import subprocess|os\\.system|popen|eval\\(|exec\\(' src/",
+      "exit_code": 0,
+      "summary": "One source of process-execution capability in src/: connectors/local_files.py:95 imports subprocess to run 'git check-ignore -z --stdin' with a fixed argv and piped stdin (Sprint 1/2 code; no shell, no user-controlled binary). No network capability anywhere in src/.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 tools/validate_verdict.py code-reviews/review-sprint-3-repair-2.verdict.json",
+      "exit_code": 0,
+      "summary": "OK -- satisfies the review verdict gate's required shape.",
+      "source": "reviewer_probe"
+    }
+  ],
+  "lenses": {
+    "governed_surface_exclusivity": {
+      "finding_ids": [],
+      "justification": "Clean. Probe D1 wrapped the repository in a transparent recording proxy: the complete call set during answer() is search (originating in lee_kb.retrieval) then record_receipt twice (originating in lee_kb.governance), identical to the sequence retrieve() alone produces on the same inputs, with zero calls originating in any lee_kb.answer* module. Neutralizing answer.retrieve makes answer() raise rather than fall back, so no alternate evidence path exists. Statically, the only repository import across the five answer* modules is answer.py:90 under if TYPE_CHECKING -- type-only, not runtime."
+    },
+    "claim_assembly_and_merge_refusal": {
+      "finding_ids": [],
+      "justification": "Clean; S3-R-10 repaired and verified beyond its fixtures. Probe A ran four constructed same-authority contradiction shapes reusing no shipped fixture wording. Both halves hold: exactly one Conflict and two singly-cited claims with detection live, and two unmerged claims with detect_conflicts neutralized entirely -- so the merge refusal does not depend on detection improving, which was the prior review's explicit concern."
+    },
+    "conflict_detection": {
+      "finding_ids": ["S3-R-15"],
+      "justification": "Contradiction detection is materially better than pre-repair -- probe E' shows HEAD misses the control contradiction that the working tree catches. Disagreement reporting is materially worse: the new structural-divergence branch fires on term-set inequality above a 0.5 similarity floor, so 5 of 6 constructed agreeing pairs are reported as competing against 1 of 6 pre-repair, one instance now ships inside the benchmark corpus, and the shipped lee-kb ask command prints two identical-meaning sentences under a Conflicts: heading."
+    },
+    "conflict_reconciliation": {
+      "finding_ids": [],
+      "justification": "Clean under the new merge rule. Probe C ran five shapes of three-to-four same-topic sources across two authorities, including one where the agreeing pair is cross-authority and merges first: in every case the maximum number of claims citing any one chunk is 1, no surviving claim asserts both sides, every conflict side is present in result.claims, cited chunks equal used-evidence chunks, and answer() never raises."
+    },
+    "absence_states": {
+      "finding_ids": [],
+      "justification": "Clean; S3-R-11 repaired. Probe D3 shows the three states stay distinguishable with four distinct detail strings, and an inaccessible result is reported as INACCESSIBLE with withheld_count=1 and UNKNOWN confidence, asserted not NOT_FOUND. Probe B shows the evidenced-absence path is now additive: a short, same-topic, top-ranked 'does not exist' record joins the answer as its own singly-cited claim while both substantive claims survive with their citations and nothing is demoted to evidence_omitted."
+    },
+    "citations_and_receipts": {
+      "finding_ids": [],
+      "justification": "Clean. Probes D2 and F together measure 0 uncited claims and 0 unresolved citations across seven questions and two corpora -- every citation's item_id and chunk_id resolves to a real item and chunk with a matching source_locator -- and receipt_ids covers exactly evidence_used union evidence_omitted."
+    },
+    "confidence_model": {
+      "finding_ids": [],
+      "justification": "Clean; derived rather than asserted. Probe D4 shows answer()'s signature carries no confidence parameter, and confidence tracks evidence shape for the same caller: two term-identical sources yield one synthesized claim, while two differing sources yield two directly_evidenced claims."
+    },
+    "dependency_and_llm_boundary": {
+      "finding_ids": [],
+      "justification": "Clean, verified repository-wide rather than on the delivered slice. pyproject.toml project.dependencies is []; an AST walk over all 31 tracked Python files finds pytest as the only non-stdlib, non-local import anywhere in the repository; and a 22-term model-client class scan over all 98 tracked files returns exactly one hit in src/, tests/ or tools/ -- the English word 'requests' inside a governance.py error string. No runtime dependency was added and no LLM client is imported."
+    },
+    "disclosure_and_secrets": {
+      "finding_ids": [],
+      "justification": "Clean, scanned over the class repository-wide across all 98 tracked files rather than one pattern. Absolute host paths: zero hits in src/, tests/ or tools/ beyond the documented public config contract and the disclosure checker's own pattern literals -- S3-R-14 is closed. Credential shapes: four hits, all the connector's secret tripwire and the tests exercising it; no credential value. Private corpus content: referenced only by root name and counts in 28 files, never by document content, and no .sqlite, .db, .env, .pem, key artefact or scratch directory is tracked. E-mail: three @example.com placeholders plus the published owner identity."
+    },
+    "benchmark_reproducibility_and_documentation": {
+      "finding_ids": ["S3-R-16"],
+      "justification": "Every figure I could re-derive reproduces exactly against both trees -- 11 claims all directly_evidenced with 0 unresolved citations post-repair, 9+1=10 pre-repair, and 19 collected benchmark items. What does not reproduce is the narrative: the document never names the structural-divergence branch that actually fires for two of the three new family-5d fixtures, misattributes them to antonym handling, and reports the family-7 confidence-distribution change while omitting the conflict-count change 3 -> 4 on the same question. The recommendation value matches my conclusion; its justification understates the open correctness surface."
+    },
+    "tests_and_coverage": {
+      "finding_ids": ["S3-R-15", "S3-R-16"],
+      "justification": "The suite is green at 245 tests and 19/19 benchmark items and still cannot catch S3-R-15. The single negative conflict fixture (tests/test_answer_conflict.py:208) sits at Jaccard 0.4, below the 0.5 gate, so it never exercises the new branch, and no fixture asserts that agreeing statements produce zero conflicts. Two of the three new family-5d fixtures pass through the defective branch itself. This is the third consecutive round in which the new behaviour goes unpinned in the direction opposite the finding it repaired."
+    }
+  },
+  "readiness_criteria": [
+    {"criterion": "S3-R-10 contradiction repair complete, both halves", "state": "verified_true", "basis": "Probe A: four constructed shapes; conflict plus two singly-cited claims, and merge refusal holds with detection neutralized."},
+    {"criterion": "S3-R-11 additive-absence repair complete", "state": "verified_true", "basis": "Probe B control/treatment: a top-ranked same-topic absence record joins the answer and both substantive claims survive."},
+    {"criterion": "Conflict reconciliation: one claim per chunk, no resurrected merge", "state": "verified_true", "basis": "Probe C over five shapes across two authorities."},
+    {"criterion": "Conflict detection reports only real disagreement", "state": "verified_false", "basis": "Probe E vs E-prime: 5/6 constructed agreeing pairs reported as conflicts against 1/6 pre-repair; probe F: reaches the project's own benchmark corpus; reproduced through lee-kb ask."},
+    {"criterion": "answer() composes strictly over governance.retrieve()", "state": "verified_true", "basis": "Probe D1 plus the static import scan."},
+    {"criterion": "Every substantive claim carries a resolving citation", "state": "verified_true", "basis": "Probes D2 and F: 0 uncited, 0 unresolved."},
+    {"criterion": "The three absence states remain distinguishable; INACCESSIBLE is never NOT_FOUND", "state": "verified_true", "basis": "Probe D3."},
+    {"criterion": "Confidence is derived, not asserted", "state": "verified_true", "basis": "Probe D4."},
+    {"criterion": "No runtime dependency added; no LLM client imported", "state": "verified_true", "basis": "Repository-wide dependency, AST-import and model-client scans over all 98 tracked files."},
+    {"criterion": "No absolute host path, private corpus content, or credential-shaped detail in any tracked file", "state": "verified_true", "basis": "Repository-wide class scans; S3-R-14 closed; no hit in src/, tests/ or tools/."},
+    {"criterion": "Product verification commands green (per preserved system-validator records)", "state": "verified_true", "basis": "Eight preserved records, all exit status 0 and passed true, summarized from the preserved artifact."},
+    {"criterion": "Benchmark document's recommendation matches observed behaviour", "state": "verified_false", "basis": "S3-R-16: the recommendation value is right; its stated justification omits the branch that produced both the gain and the regression, and one measured change on the same question."},
+    {"criterion": "Semantic conformance independently judged", "state": "not_evidenced", "required_evidence": ["semantic_judge_execution"], "basis": "This playbook declares no semantic_check rule, so the evaluator evidence packet marks that class not_applicable."}
+  ]
+}

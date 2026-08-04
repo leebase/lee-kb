@@ -10,6 +10,7 @@ same invariant explicit when claims are combined downstream.
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from itertools import combinations
 
 from .answer_contracts import Claim, Confidence, Conflict, ConflictSide
@@ -23,6 +24,7 @@ __all__ = [
 ]
 
 _TOKEN_PATTERN = re.compile(r"[\w-]+", re.UNICODE)
+_NUMBER_PATTERN = re.compile(r"(?<!\w)\d+(?:,\d{3})*(?:\.\d+)?(?!\w)")
 _SUPERSESSION_PATTERN = re.compile(
     r"\b(?:supersed\w*|replac\w*|no longer|instead of|revis(?:e|ed|ion))\b",
     re.IGNORECASE,
@@ -73,6 +75,14 @@ _VALUE_WORDS = frozenset(
         "required",
     }
 )
+_KNOWN_SYNONYM_SETS = (
+    frozenset({"mandate", "mandated", "mandates", "require", "required", "requires"}),
+    frozenset({"retain", "retained", "retaining", "retains", "retention"}),
+)
+_SYNONYM_CANONICAL = {
+    term: min(synonyms) for synonyms in _KNOWN_SYNONYM_SETS for term in synonyms
+}
+_STRUCTURAL_DIVERGENCE_THRESHOLD = 0.5
 
 
 def detect_conflicts(
@@ -86,10 +96,11 @@ def detect_conflicts(
     per selected item.  The latter is useful before the full answer assembler
     exists and preserves the same citations and ordering.
 
-    Two same-topic statements conflict when their text differs and their value
-    words diverge, their declared authority differs, or the newer statement
-    explicitly says it supersedes/replaces earlier material.  These are
-    detection signals only; the returned ``Conflict`` contract has no winner.
+    Two same-topic statements conflict when their text differs and their
+    numbers, meaningful terms, or known value words diverge; their declared
+    authority differs; or the newer statement explicitly says it
+    supersedes/replaces earlier material. These are detection signals only;
+    the returned ``Conflict`` contract has no winner.
     """
     if not isinstance(selection, EvidenceSelection):
         raise TypeError("detect_conflicts requires an EvidenceSelection")
@@ -111,12 +122,15 @@ def detect_conflicts(
             continue
         left_claim = evidence_claims[left_evidence.chunk_id]
         right_claim = evidence_claims[right_evidence.chunk_id]
-        if left_claim == right_claim:
-            # A premature assembler may have merged both citations into one
-            # claim. Reconstitute every citation in that merged claim and
-            # update the map immediately, so later pairs resolve transitively
-            # to the single-evidence claims rather than resurrecting the merge.
-            merged_claim = left_claim
+        # A claim participating in a conflict cannot stay merged, even when
+        # its citations agree with one another: each governed source remains a
+        # separately inspectable side once that assertion is disputed. Update
+        # the map immediately so later pairs resolve transitively to the
+        # single-evidence claims rather than resurrecting either merge.
+        merged_claims = {
+            claim for claim in (left_claim, right_claim) if len(claim.citations) > 1
+        }
+        for merged_claim in merged_claims:
             for evidence in selection.selected:
                 if evidence_claims[evidence.chunk_id] == merged_claim:
                     evidence_claims[evidence.chunk_id] = _direct_claim(evidence)
@@ -214,6 +228,12 @@ def _conflict_signal(left: Evidence, right: Evidence) -> str | None:
     if not shared_topic:
         return None
 
+    if _numbers_diverge(left.text, right.text):
+        return (
+            "Competing statements about "
+            f"{', '.join(sorted(shared_topic))} use different numeric values."
+        )
+
     if _value_words_diverge(left.text, right.text):
         return (
             "Competing statements about "
@@ -227,12 +247,23 @@ def _conflict_signal(left: Evidence, right: Evidence) -> str | None:
         )
 
     if left.source_timestamp == right.source_timestamp:
-        return None
-    newer = left if left.source_timestamp > right.source_timestamp else right
-    if _SUPERSESSION_PATTERN.search(newer.text):
+        newer = None
+    else:
+        newer = left if left.source_timestamp > right.source_timestamp else right
+    if newer is not None and _SUPERSESSION_PATTERN.search(newer.text):
         return (
             "A newer statement about "
             f"{', '.join(sorted(shared_topic))} explicitly supersedes older material."
+        )
+
+    if _meaningful_term_similarity(
+        left.text, right.text
+    ) >= _STRUCTURAL_DIVERGENCE_THRESHOLD and not _statements_mergeable(
+        left.text, right.text
+    ):
+        return (
+            "Competing statements about "
+            f"{', '.join(sorted(shared_topic))} differ in meaningful terms."
         )
     return None
 
@@ -247,7 +278,6 @@ def _subject_terms(text: str) -> frozenset[str]:
         for token in _normalized_text(text)
         if token not in _STOP_WORDS
         and token not in _VALUE_WORDS
-        and not token.isdecimal()
         and not _SUPERSESSION_PATTERN.fullmatch(token)
     )
 
@@ -256,3 +286,56 @@ def _value_words_diverge(left: str, right: str) -> bool:
     left_values = frozenset(_normalized_text(left)) & _VALUE_WORDS
     right_values = frozenset(_normalized_text(right)) & _VALUE_WORDS
     return bool(left_values and right_values and left_values != right_values)
+
+
+def _numbers_diverge(left: str, right: str) -> bool:
+    left_values = _numeric_values(left)
+    right_values = _numeric_values(right)
+    if not left_values or not right_values or left_values == right_values:
+        return False
+
+    left_subject = frozenset(
+        term for term in _subject_terms(left) if not term.isdecimal()
+    )
+    right_subject = frozenset(
+        term for term in _subject_terms(right) if not term.isdecimal()
+    )
+    if not left_subject or not right_subject:
+        return False
+    subject_similarity = len(left_subject & right_subject) / len(
+        left_subject | right_subject
+    )
+    return subject_similarity >= _STRUCTURAL_DIVERGENCE_THRESHOLD
+
+
+def _numeric_values(text: str) -> frozenset[Decimal]:
+    return frozenset(
+        Decimal(number.replace(",", "")) for number in _NUMBER_PATTERN.findall(text)
+    )
+
+
+def _statements_mergeable(left: str, right: str) -> bool:
+    """Return whether differences are empty after known synonym normalization."""
+    left_terms = _meaningful_terms(left)
+    right_terms = _meaningful_terms(right)
+    if left_terms == right_terms:
+        return True
+    return _canonical_terms(left_terms) == _canonical_terms(right_terms)
+
+
+def _meaningful_term_similarity(left: str, right: str) -> float:
+    left_terms = _meaningful_terms(left)
+    right_terms = _meaningful_terms(right)
+    if not left_terms or not right_terms:
+        return 0.0
+    return len(left_terms & right_terms) / len(left_terms | right_terms)
+
+
+def _meaningful_terms(text: str) -> frozenset[str]:
+    return frozenset(
+        token for token in _normalized_text(text) if token not in _STOP_WORDS
+    )
+
+
+def _canonical_terms(terms: frozenset[str]) -> frozenset[str]:
+    return frozenset(_SYNONYM_CANONICAL.get(term, term) for term in terms)

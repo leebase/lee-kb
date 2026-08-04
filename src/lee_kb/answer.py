@@ -52,7 +52,7 @@ from typing import TYPE_CHECKING
 
 from .answer_absence import AbsenceAssessment, AbsenceBasis, classify_absence
 from .answer_conflict import (
-    _value_words_diverge,
+    _statements_mergeable,
     detect_conflicts,
     retain_conflict_sides,
 )
@@ -236,9 +236,7 @@ def answer(
         resolution_failed=resolution_failed,
     )
 
-    if assessment is not None and assessment.is_evidenced:
-        return _assemble_evidenced_absence(bundle, selection, assessment, provider)
-    if assessment is not None:
+    if assessment is not None and not assessment.is_evidenced:
         return _assemble_absence(bundle, assessment)
 
     if not selection.selected:
@@ -253,6 +251,9 @@ def answer(
         bundle,
         selection,
         synthesis_similarity_threshold=synthesis_similarity_threshold,
+        evidenced_absence_claim=(
+            assessment.supporting_claim if assessment is not None else None
+        ),
         provider=provider,
     )
 
@@ -318,61 +319,31 @@ def _assemble_no_grounded_evidence(
     )
 
 
-def _assemble_evidenced_absence(
-    bundle: EvidenceBundle,
-    selection: EvidenceSelection,
-    assessment: AbsenceAssessment,
-    provider: SynthesisProvider | None,
-) -> Answer:
-    claim = assessment.supporting_claim
-    assert claim is not None  # guaranteed by AbsenceAssessment when is_evidenced
-    cited_chunk_ids = set(claim.cited_chunk_ids)
-    evidence_used = tuple(
-        EvidenceRef(chunk_id=item.chunk_id, source_locator=item.citation.source_locator)
-        for item in selection.selected
-        if item.chunk_id in cited_chunk_ids
-    )
-    selected_omissions = tuple(
-        OmittedEvidence(
-            evidence=EvidenceRef(
-                chunk_id=item.chunk_id, source_locator=item.citation.source_locator
-            ),
-            reason=OmissionReason.NOT_RELEVANT,
-            detail="Not part of the explicit statement answering this question.",
-        )
-        for item in selection.selected
-        if item.chunk_id not in cited_chunk_ids
-    )
-    evidence_omitted = selection.answer_omissions + selected_omissions
-    claims = (claim,)
-    prose, synthesis_provider_id = _narrate(provider, claims)
-    return Answer(
-        question=bundle.request.query,
-        principal=bundle.request.principal,
-        project=bundle.request.project,
-        claims=claims,
-        confidence=Confidence.DIRECTLY_EVIDENCED,
-        receipt_ids=selection.receipt_ids,
-        evidence_used=evidence_used,
-        evidence_omitted=evidence_omitted,
-        conflicts=(),
-        absence=None,
-        answered_at=bundle.retrieval_timestamp,
-        prose=prose,
-        synthesis_provider_id=synthesis_provider_id,
-    )
-
-
 def _assemble_evidenced_answer(
     bundle: EvidenceBundle,
     selection: EvidenceSelection,
     *,
     synthesis_similarity_threshold: float,
+    evidenced_absence_claim: Claim | None,
     provider: SynthesisProvider | None,
 ) -> Answer:
-    initial_claims = _assemble_initial_claims(
-        selection.selected, synthesis_similarity_threshold
+    absence_chunk_ids = (
+        frozenset(evidenced_absence_claim.cited_chunk_ids)
+        if evidenced_absence_claim is not None
+        else frozenset()
     )
+    ordinary_evidence = tuple(
+        evidence
+        for evidence in selection.selected
+        if evidence.chunk_id not in absence_chunk_ids
+    )
+    initial_claims = _assemble_initial_claims(
+        ordinary_evidence, synthesis_similarity_threshold
+    )
+    if evidenced_absence_claim is not None:
+        initial_claims = _rank_claims(
+            initial_claims + (evidenced_absence_claim,), selection.selected
+        )
     conflicts = detect_conflicts(selection, claims=initial_claims)
     final_claims = _reconcile_with_conflicts(initial_claims, conflicts)
 
@@ -422,12 +393,12 @@ def _assemble_initial_claims(
 ) -> tuple[Claim, ...]:
     """Group selected evidence into one claim per distinct statement.
 
-    Evidence from two different sources merges into one SYNTHESIZED claim
-    when their meaningful-term overlap clears ``similarity_threshold`` --
-    the deterministic stand-in for "these sources say the same thing".
-    Everything else becomes its own DIRECTLY_EVIDENCED claim. Merges are
-    strictly pairwise so conflict reconciliation can always swap a merged
-    claim for exactly the two single-evidence claims it came from.
+    Evidence from two different sources merges into one SYNTHESIZED claim only
+    when its differing meaningful terms are empty after known-synonym
+    normalization and its overlap clears ``similarity_threshold``. Everything
+    else becomes its own DIRECTLY_EVIDENCED claim. Merges are strictly pairwise
+    so conflict reconciliation can always swap a merged claim for exactly the
+    two single-evidence claims it came from.
     """
     claimed: set = set()
     claims: list[Claim] = []
@@ -441,7 +412,7 @@ def _assemble_initial_claims(
                 continue
             if candidate.item_id == evidence.item_id:
                 continue
-            if _value_words_diverge(evidence.text, candidate.text):
+            if not _statements_mergeable(evidence.text, candidate.text):
                 continue
             score = _similarity(evidence.text, candidate.text)
             if score >= similarity_threshold and score > best_score:
@@ -485,6 +456,22 @@ def _reconcile_with_conflicts(
         if not (set(claim.cited_chunk_ids) & displaced_chunk_ids)
     )
     return retain_conflict_sides(kept, conflicts)
+
+
+def _rank_claims(
+    claims: tuple[Claim, ...], selected: tuple[Evidence, ...]
+) -> tuple[Claim, ...]:
+    evidence_rank = {
+        evidence.chunk_id: index for index, evidence in enumerate(selected)
+    }
+    return tuple(
+        sorted(
+            claims,
+            key=lambda claim: min(
+                evidence_rank[chunk_id] for chunk_id in claim.cited_chunk_ids
+            ),
+        )
+    )
 
 
 def _direct_claim(evidence: Evidence) -> Claim:

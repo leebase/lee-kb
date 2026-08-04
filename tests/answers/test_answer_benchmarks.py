@@ -182,6 +182,28 @@ The deployment channel for Equinox is disabled.
 )
 
 
+CONTRADICTION_CASES = (
+    (
+        "enabled-versus-turned-off",
+        "What is the state of the release gate for Kestrel?",
+        "The release gate for Kestrel is enabled.",
+        "The release gate for Kestrel is turned off.",
+    ),
+    (
+        "permitted-versus-forbidden",
+        "What is the export policy for Vega?",
+        "The export policy for Vega is permitted.",
+        "The export policy for Vega is forbidden.",
+    ),
+    (
+        "numeric-divergence",
+        "What is the retention window for Lyra in days?",
+        "The retention window for Lyra is 30 days.",
+        "The retention window for Lyra is 90 days.",
+    ),
+)
+
+
 @pytest.fixture(scope="module")
 def benchmark_repository(tmp_path_factory):
     workspace = tmp_path_factory.mktemp("answer-benchmarks")
@@ -283,6 +305,16 @@ def _ask(repository: SQLiteRepository, question: str, **options):
         clock=lambda: ANSWER_TIME,
         **options,
     )
+
+
+def _ask_sources(workspace, sources: tuple[SourceFixture, ...], question: str):
+    roots = _write_sources(workspace, sources)
+    connector = LocalFilesConnector(
+        tuple(roots), connector_id=f"{CONNECTOR_ID}_{workspace.name}"
+    )
+    with SQLiteRepository(workspace / "knowledge.sqlite") as repository:
+        _sync(connector, repository, expected_sources=len(sources))
+        return _ask(repository, question)
 
 
 DOCUMENTATION_STEWARD_QUESTION = (
@@ -425,6 +457,109 @@ def test_same_authority_value_word_contradiction_stays_as_two_claims(
     claim_texts = tuple(claim.text.casefold() for claim in result.claims)
     assert any("enabled" in text and "disabled" not in text for text in claim_texts)
     assert any("disabled" in text and "enabled" not in text for text in claim_texts)
+
+
+@pytest.mark.parametrize(
+    ("case_name", "question", "left_statement", "right_statement"),
+    CONTRADICTION_CASES,
+    ids=tuple(case[0] for case in CONTRADICTION_CASES),
+)
+def test_same_subject_divergence_outside_value_word_list_is_a_conflict(
+    tmp_path,
+    case_name,
+    question,
+    left_statement,
+    right_statement,
+) -> None:
+    sources = (
+        SourceFixture("reviewer-left", f"{case_name}-left.md", left_statement),
+        SourceFixture("reviewer-right", f"{case_name}-right.md", right_statement),
+    )
+
+    result = _ask_sources(tmp_path, sources, question)
+
+    assert len(result.conflicts) == 1
+    assert len(result.claims) == 2
+    assert all(len(claim.citations) == 1 for claim in result.claims)
+    assert {
+        citation.item_id.source_object_id.split(":", 1)[0]
+        for claim in result.claims
+        for citation in claim.citations
+    } == {"reviewer-left", "reviewer-right"}
+    assert set(result.conflicts[0].claims) == set(result.claims)
+
+
+def test_top_ranked_absence_statement_is_additive_to_substantive_answer(
+    tmp_path,
+) -> None:
+    sources = (
+        SourceFixture(
+            "aurora-checklist",
+            "requirements.md",
+            (
+                "The aurora readiness review requires the cobalt checklist. "
+                "Operators complete its telemetry, rollback, communications, "
+                "and observability sections before launch."
+            ),
+            authority=Authority.CANONICAL,
+        ),
+        SourceFixture(
+            "aurora-approval",
+            "approval.md",
+            (
+                "The aurora readiness review requires signed launch approval. "
+                "The operations lead records the approval after the final "
+                "resilience exercise and stakeholder briefing."
+            ),
+            authority=Authority.CANONICAL,
+        ),
+        SourceFixture(
+            "aurora-dossier",
+            "dossier.md",
+            "The aurora readiness review dossier does not exist.",
+            authority=Authority.CANONICAL,
+        ),
+    )
+
+    control_workspace = tmp_path / "control"
+    control_workspace.mkdir()
+    control = _ask_sources(
+        control_workspace,
+        sources[:2],
+        "What does the aurora readiness review require?",
+    )
+    assert any("cobalt checklist" in claim.text.casefold() for claim in control.claims)
+    assert any(
+        "signed launch approval" in claim.text.casefold() for claim in control.claims
+    )
+
+    treatment_workspace = tmp_path / "treatment"
+    treatment_workspace.mkdir()
+    result = _ask_sources(
+        treatment_workspace,
+        sources,
+        "What does the aurora readiness review require?",
+    )
+
+    assert (
+        result.evidence_used[0].chunk_id.item_id.source_object_id.split(":", 1)[0]
+        == "aurora-dossier"
+    )
+    claim_texts = tuple(claim.text.casefold() for claim in result.claims)
+    assert any("cobalt checklist" in text for text in claim_texts)
+    assert any("signed launch approval" in text for text in claim_texts)
+    absence_claims = tuple(
+        claim for claim in result.claims if "does not exist" in claim.text.casefold()
+    )
+    assert len(absence_claims) == 1
+    assert result.claims[0] == absence_claims[0]
+    assert absence_claims[0].confidence is Confidence.DIRECTLY_EVIDENCED
+    assert len(absence_claims[0].citations) == 1
+    assert {
+        citation.item_id.source_object_id.split(":", 1)[0]
+        for claim in result.claims
+        for citation in claim.citations
+    } >= {"aurora-checklist", "aurora-approval", "aurora-dossier"}
 
 
 def test_unresponsive_absence_shaped_sentence_does_not_replace_answer(

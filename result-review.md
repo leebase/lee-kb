@@ -3,6 +3,124 @@
 > **Running log of completed work.** Newest entries are at the top. Each entry
 > records what changed, why it matters, and how to verify it.
 
+## 2026-08-04 — Round-two repair of the governed `answer()` surface (S3-R-10, S3-R-11); full verification re-confirmed green; benchmark results re-derived
+
+### What Was Built
+
+A follow-up independent review (`code-reviews/review-sprint-3-repair.md`)
+proved that round one's repair of S3-R-01/S3-R-02 (previous entry below)
+narrowed each defect's shape without fixing its class. Two new High findings
+were repaired for this step:
+
+- **S3-R-10 (High, correctness/conflict detection and claim assembly)** —
+  both halves of the round-one fix (the conflict signal and the merge
+  refusal) were keyed to the same closed 14-word value-word vocabulary, so a
+  contradiction phrased outside it (`"enabled"` vs `"turned off"`,
+  `"permitted"` vs `"forbidden"`, or any purely numeric divergence such as
+  `"30 days"` vs `"90 days"`) reproduced the original merge-into-one-claim
+  failure exactly. `_assemble_initial_claims` (`src/lee_kb/answer.py`) now
+  merges two evidence items only when their differing meaningful terms are
+  empty or a known synonym set (`_statements_mergeable` in
+  `src/lee_kb/answer_conflict.py`), inverting the previous rule of merging
+  unless a known antonym was seen. `_conflict_signal`
+  (`src/lee_kb/answer_conflict.py`) gained an explicit numeric-divergence
+  signal (same-subject statements carrying different numeric literals) ahead
+  of the value-word check, and `_subject_terms` no longer discards decimals.
+  A parametrized regression fixture
+  (`test_same_subject_divergence_outside_value_word_list_is_a_conflict`, 3
+  cases) was added to `tests/answers/test_answer_benchmarks.py`.
+- **S3-R-11 (High, correctness/answer quality)** — the evidenced-absence path
+  still **replaced** the whole answer when its relevance-and-top-rank gate
+  passed, demoting every other selected evidence item to `evidence_omitted`,
+  so a short, top-ranked, genuinely relevant "X does not exist" record could
+  still suppress a correct multi-source answer. `answer()`
+  (`src/lee_kb/answer.py`) now assembles claims from the full selected
+  evidence as normal and, when the explicit-absence gate passes, appends that
+  cited statement as one more `DIRECTLY_EVIDENCED` claim in rank order
+  instead of replacing the answer; the top-rank requirement in
+  `classify_absence`/`_explicit_absence_evidence`
+  (`src/lee_kb/answer_absence.py`) was removed since it is no longer needed
+  to prevent suppression. A regression fixture
+  (`test_top_ranked_absence_statement_is_additive_to_substantive_answer`) was
+  added.
+
+This step additionally re-drove full verification and updated documentation
+to match the repaired behavior: `docs/answer-benchmark-results.md` now
+reports 19 collected benchmark items (four new regression fixtures across two
+families), a corrected Confidence Distribution reflecting a genuine behavior
+change (the harbor-readiness question's two statements no longer merge into
+one `SYNTHESIZED` claim now that the merge rule is inverted: 11
+`DIRECTLY_EVIDENCED` claims, 0 `SYNTHESIZED`, across the five family-7
+questions), and a new Conflict Examples entry drawn from the numeric-
+divergence fixture (the case the previous document could not demonstrate,
+since the round-one same-authority example used an in-vocabulary antonym
+pair). The Recommendation remains **Ready after specific follow-up** —
+S3-R-10 and S3-R-11 are fixed, but one correctness-adjacent finding from the
+same review, S3-R-12 (Medium: `_conflict_signal` can report a `Conflict`
+between statements that do not actually disagree, reproduced against the
+current code for this step), plus the carried-forward Medium findings
+(S3-R-04, S3-R-05) and Low findings (S3-R-07, S3-R-08, S3-R-09, all
+documentation accuracy) remain open, alongside the pre-existing deferrals
+(LLM-backed synthesis provider, real-corpus measurement, live filesystem
+verification, and the two inherited `retrieve()` open questions). S3-R-14
+(High, disclosure: an absolute host path in a test fixture) and S3-R-13
+(Medium, documentation accuracy: the round-one benchmark document overclaimed
+completeness) from the same follow-up review were already repaired before
+this step — S3-R-14 by removing the host path and adding
+`tools/check_disclosure.py`, and S3-R-13 by this step's rewrite itself, which
+now qualifies each fixture's guarantee to the shape actually proven rather
+than generalizing.
+
+### Why It Matters
+
+Each of the two repaired findings produced a confidently-labelled wrong
+answer that survived a green 245-test suite before this step: S3-R-10, a
+single claim asserting both "enabled" and "turned off" (or "30 days" and "90
+days") with no conflict shown, reproduced through the shipped CLI in the
+follow-up review; S3-R-11, a responsive two-source answer replaced entirely
+by an unrelated-looking but technically relevant and top-ranked "does not
+exist" statement. Both are now bounded by permanent regression fixtures that
+reproduce the reviewer's exact constructed inputs, so a future change that
+reintroduces either class fails the suite rather than passing it silently.
+The fix is also demonstrably more general than round one's, not merely
+patched around the reviewer's specific examples: it inverts the underlying
+rule (merge only on demonstrated equivalence) rather than extending a word
+list, which is why it closes all three reviewer-proven out-of-vocabulary
+shapes (two antonym pairs plus a numeric one) with one change.
+
+### How to Verify
+
+Preserved system-validator evidence for this step
+(`agent_orch.validators.command_succeeds@1`; validator rerun not permitted,
+so these are reported, not re-executed):
+
+| # | Command | Exit | Result | Tied to | Evidence hash |
+|---|---------|-----:|--------|---------|---------------|
+| 1 | `python3 -m pytest tests/` | 0 | 245 passed in 23.04s | step_01_invert_merge_and_additive_absence acceptance criterion, attempt 1 | `5d6ab97a4aeae6981dc60f4d39ba5017c43555796465239a17a4a0c93e0d2290` |
+| 2 | `python3 -m pytest tests/` | 0 | 245 passed in 23.29s | step_01_invert_merge_and_additive_absence acceptance criterion, attempt 2 | `8a2da7bf6ef0760d2327967cb5d2e53d556517422bd425eb369223dd40df657f` |
+
+Fresh in this step (not preserved evidence):
+
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` — clean,
+  `31 files would be left unchanged`, exit 0, no reformatting needed.
+- `python3 -m ruff check src tests tools` — clean, exit 0 (the same
+  pre-existing `pyproject.toml` linter-settings deprecation warning tracked
+  as S2-R-10 remains, out of this step's scope).
+- `python3 -m compileall -q src tests tools` — clean, exit 0, no output.
+- `python3 tools/check_disclosure.py` — clean, exit 0: `check_disclosure:
+  clean — no host paths or credentials in tracked files.`
+- `git diff --check` — clean, exit 0, no output.
+- `python3 -m pytest tests/answers/ -v` — 19 passed in 1.10s, exit 0
+  (supplementary, not preserved evidence — used to confirm the four new
+  regression fixtures collect and pass, and to derive the per-family table in
+  `docs/answer-benchmark-results.md`).
+- `docs/answer-benchmark-results.md` — rewritten to reflect the round-two
+  repaired behavior: updated Benchmark Cases (19 items across two further
+  expanded families), a corrected Confidence Distribution reflecting the
+  genuine merge-rule behavior change, a new numeric-divergence Conflict
+  Example, and a Recommendation that states S3-R-12 and the still-open
+  Medium/Low findings plainly rather than implying full resolution.
+
 ## 2026-08-04 — Repair of the three High findings from the Sprint 3 review (S3-R-01, S3-R-02, S3-R-03); full verification re-confirmed green; benchmark results re-derived
 
 ### What Was Built

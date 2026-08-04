@@ -136,8 +136,8 @@ def classify_absence(
 
     ``selected_evidence`` narrows explicit-absence detection to evidence that
     already passed the caller's allocation and relevance policy. The matched
-    absence sentence must itself clear ``relevance_threshold`` and its chunk
-    must be first in the governed bundle's rank order.
+    absence sentence must itself clear ``relevance_threshold``. Its governed
+    rank does not change whether that cited statement is presented.
 
     Permission denial has first priority for an empty result.  Consequently a
     result with ``denied_count > 0`` can never be misreported as ``NOT_FOUND``.
@@ -247,12 +247,7 @@ def _explicit_absence_evidence(
 ) -> tuple[tuple[Evidence, str], ...]:
     question_terms = _meaningful_terms(bundle.request.query)
     matches: list[tuple[Evidence, str]] = []
-    if not bundle.evidence:
-        return ()
-    top_ranked_chunk_id = bundle.evidence[0].chunk_id
     for evidence in selected_evidence:
-        if evidence.chunk_id != top_ranked_chunk_id:
-            continue
         for raw_sentence in _SENTENCE_BOUNDARY.split(evidence.text):
             sentence = raw_sentence.strip()
             if not sentence:
