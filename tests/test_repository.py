@@ -1,5 +1,6 @@
 """Behavioral tests for the SQLite latest-state repository."""
 
+import sqlite3
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -137,8 +138,27 @@ def test_tombstone_hides_search_result_but_receipt_remains_resolvable(
 
 
 def test_schema_version_is_stored_and_readable(repository) -> None:
-    assert repository.schema_version == 1
-    assert repository.get_schema_version() == 1
+    assert repository.schema_version == 2
+    assert repository.get_schema_version() == 2
+
+
+def test_schema_v1_migrates_to_query_audit_events(tmp_path) -> None:
+    database = tmp_path / "knowledge.sqlite"
+    with SQLiteRepository(database) as repository:
+        item, chunks = make_projection()
+        repository.sync_item(item, chunks)
+
+    connection = sqlite3.connect(database)
+    connection.execute("UPDATE meta SET value = '1' WHERE key = 'schema_version'")
+    connection.execute("DROP TABLE retrieval_audit_events")
+    connection.execute("UPDATE knowledge_items SET schema_version = 1")
+    connection.commit()
+    connection.close()
+
+    with SQLiteRepository(database) as migrated:
+        assert migrated.schema_version == 2
+        assert migrated.get_item(item.item_id).schema_version == 2
+        assert migrated.list_retrieval_events() == ()
 
 
 def test_cursor_does_not_advance_when_ingestion_fails(repository) -> None:
@@ -150,3 +170,99 @@ def test_cursor_does_not_advance_when_ingestion_fails(repository) -> None:
         repository.sync_item(item, (bad_chunk,), cursor="unsafe-cursor")
 
     assert repository.get_connector_cursor("local_files") == "safe-cursor"
+
+
+def test_cursor_only_advance_persists_empty_delta_without_projection_rows(
+    repository,
+) -> None:
+    item, chunks = make_projection()
+    repository.sync_item(item, chunks, cursor="cursor-before")
+
+    repository.advance_cursor(
+        "local_files",
+        "cursor-after-empty-delta",
+        updated_at=SYNC_TIME + timedelta(minutes=1),
+        project="personal",
+    )
+
+    assert repository.get_connector_cursor("local_files") == "cursor-after-empty-delta"
+    assert repository.get_item(item.item_id) == item
+    assert repository.get_chunks(item.item_id) == chunks
+    assert len(repository.journal_entries(item.item_id)) == 1
+
+
+def test_cursor_only_advance_rolls_back_when_cursor_write_fails(
+    repository, monkeypatch
+) -> None:
+    item, chunks = make_projection()
+    repository.sync_item(item, chunks, cursor="cursor-before")
+    original_upsert = repository._upsert_cursor
+
+    def fail_after_write(connector_id, cursor, updated_at):
+        original_upsert(connector_id, cursor, updated_at)
+        raise RuntimeError("simulated cursor commit failure")
+
+    monkeypatch.setattr(repository, "_upsert_cursor", fail_after_write)
+
+    with pytest.raises(RuntimeError, match="simulated cursor commit failure"):
+        repository.advance_cursor(
+            "local_files",
+            "cursor-should-rollback",
+            updated_at=SYNC_TIME + timedelta(minutes=1),
+            project="empty-project",
+        )
+
+    assert repository.get_connector_cursor("local_files") == "cursor-before"
+    assert not repository.has_synchronized_project("empty-project")
+
+
+def test_external_round_rolls_back_projection_and_cursor_together(
+    repository, monkeypatch
+) -> None:
+    first, first_chunks = make_projection("first external item")
+    second_base, second_base_chunks = make_projection("second external item")
+    second_id = KnowledgeItemId("local_files", "second.md")
+    second = replace(
+        second_base,
+        item_id=second_id,
+        source_locator=SourceLocator(
+            connector_id="local_files",
+            uri="file:///workspace/second.md",
+            label="second.md",
+        ),
+    )
+    second_chunks = (
+        replace(
+            second_base_chunks[0],
+            chunk_id=ChunkId(
+                second_id,
+                0,
+                second_base_chunks[0].content_hash,
+            ),
+        ),
+    )
+    original_upsert = repository._upsert_item
+    calls = 0
+
+    def fail_on_second(item):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("simulated external round failure")
+        original_upsert(item)
+
+    monkeypatch.setattr(repository, "_upsert_item", fail_on_second)
+
+    with pytest.raises(RuntimeError, match="external round failure"):
+        repository.apply_external_round(
+            [
+                (first.item_id, first, first_chunks),
+                (second.item_id, second, second_chunks),
+            ],
+            cursor="cursor-after-round",
+            updated_at=SYNC_TIME,
+        )
+
+    assert repository.get_item(first.item_id) is None
+    assert repository.get_item(second.item_id) is None
+    assert repository.get_connector_cursor("local_files") is None

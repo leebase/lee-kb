@@ -47,11 +47,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from .answer_absence import AbsenceAssessment, AbsenceBasis, classify_absence
 from .answer_conflict import (
+    _meaningful_term_similarity,
     _statements_mergeable,
     detect_conflicts,
     retain_conflict_sides,
@@ -84,7 +85,12 @@ from .contracts import (
     MetadataFilters,
     Principal,
 )
-from .governance import MissingPrincipalError, PermissionEvaluator, retrieve
+from .governance import (
+    MissingPrincipalError,
+    PermissionEvaluator,
+    RetrievalProviderError,
+    retrieve,
+)
 
 if TYPE_CHECKING:
     from .repository import Repository
@@ -102,7 +108,7 @@ __all__ = [
 #: two sources and merges them into one SYNTHESIZED claim.
 DEFAULT_SYNTHESIS_SIMILARITY_THRESHOLD = 0.5
 
-_TOKEN_PATTERN = re.compile(r"[\w-]+", re.UNICODE)
+_TOKEN_PATTERN = re.compile(r"\w+(?:['’]\w+)?(?:-\w+)*", re.UNICODE)
 _STOP_WORDS = frozenset(
     {
         "a",
@@ -185,6 +191,7 @@ def answer(
     project_has_synchronized_content: bool = True,
     corpus_fresh: bool | None = None,
     resolution_failed: bool = False,
+    allow_provider_failure: bool = False,
     synthesis_provider: SynthesisProvider | None = _UNSET,  # type: ignore[assignment]
 ) -> Answer:
     """Answer ``question`` for ``principal`` over evidence from governed retrieval.
@@ -202,19 +209,32 @@ def answer(
 
     ``synthesis_provider`` defaults to :data:`DEFAULT_SYNTHESIS_PROVIDER`.
     Pass ``None`` explicitly to receive claims and citations with no prose.
+    ``allow_provider_failure=True`` is an explicit surface-level choice to
+    return ``UNKNOWN`` when the retrieval provider fails; it never retries via
+    another provider or fabricates evidence.
     """
-    bundle = retrieve(
-        repository,
-        question,
-        principal=principal,
-        project=project,
-        top_k=top_k,
-        filters=filters,
-        freshness=freshness,
-        include_tombstoned=include_tombstoned,
-        permission_evaluator=permission_evaluator,
-        clock=clock,
-    )
+    try:
+        bundle = retrieve(
+            repository,
+            question,
+            principal=principal,
+            project=project,
+            top_k=top_k,
+            filters=filters,
+            freshness=freshness,
+            include_tombstoned=include_tombstoned,
+            permission_evaluator=permission_evaluator,
+            clock=clock,
+        )
+    except RetrievalProviderError:
+        if not allow_provider_failure:
+            raise
+        return _assemble_resolution_failure(
+            question,
+            principal=principal,
+            project=project,
+            clock=clock,
+        )
 
     provider = (
         DEFAULT_SYNTHESIS_PROVIDER
@@ -258,6 +278,39 @@ def answer(
     )
 
 
+def _assemble_resolution_failure(
+    question: str,
+    *,
+    principal: Principal | None,
+    project: str,
+    clock: Callable[[], datetime] | None,
+) -> Answer:
+    """Return an honest UNKNOWN answer without fabricating an empty search."""
+    if not isinstance(principal, Principal):
+        raise MissingPrincipalError(
+            "answer() requires a principal; anonymous requests are rejected"
+        )
+    answered_at = (clock or (lambda: datetime.now(timezone.utc)))()
+    return Answer(
+        question=question,
+        principal=principal,
+        project=project,
+        claims=(),
+        confidence=Confidence.UNKNOWN,
+        receipt_ids=(),
+        evidence_used=(),
+        evidence_omitted=(),
+        conflicts=(),
+        absence=Absence(
+            kind=AbsenceKind.UNKNOWN,
+            question=question,
+            detail="The question could not be resolved by the retrieval provider.",
+            searched_projects=(project,),
+        ),
+        answered_at=answered_at,
+    )
+
+
 def _assemble_absence(bundle: EvidenceBundle, assessment: AbsenceAssessment) -> Answer:
     reason = (
         OmissionReason.STALE
@@ -289,6 +342,8 @@ def _assemble_absence(bundle: EvidenceBundle, assessment: AbsenceAssessment) -> 
         conflicts=(),
         absence=assessment.absence,
         answered_at=bundle.retrieval_timestamp,
+        withheld_count=bundle.denied_count,
+        truncated=bundle.truncated,
     )
 
 
@@ -316,6 +371,8 @@ def _assemble_no_grounded_evidence(
         conflicts=(),
         absence=absence,
         answered_at=bundle.retrieval_timestamp,
+        withheld_count=bundle.denied_count,
+        truncated=bundle.truncated,
     )
 
 
@@ -370,6 +427,8 @@ def _assemble_evidenced_answer(
         answered_at=bundle.retrieval_timestamp,
         prose=prose,
         synthesis_provider_id=synthesis_provider_id,
+        withheld_count=bundle.denied_count,
+        truncated=bundle.truncated,
     )
 
 
@@ -502,19 +561,9 @@ def _citation_label(citation: Citation) -> str:
     )
 
 
-def _meaningful_terms(text: str) -> frozenset[str]:
-    return frozenset(
-        token for token in _normalized_tokens(text) if token not in _STOP_WORDS
-    )
-
-
 def _normalized_tokens(text: str) -> tuple[str, ...]:
     return tuple(token.casefold() for token in _TOKEN_PATTERN.findall(text))
 
 
 def _similarity(left: str, right: str) -> float:
-    left_terms = _meaningful_terms(left)
-    right_terms = _meaningful_terms(right)
-    if not left_terms or not right_terms:
-        return 0.0
-    return len(left_terms & right_terms) / len(left_terms | right_terms)
+    return _meaningful_term_similarity(left, right)

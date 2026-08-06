@@ -31,6 +31,8 @@ from .contracts import (
     PermissionSet,
     Principal,
     PrincipalType,
+    RetrievalAuditEvent,
+    RetrievalAuditStatus,
     RetrievalReceipt,
     SourceLocator,
     Trust,
@@ -101,6 +103,53 @@ class Repository(ABC):
     @abstractmethod
     def get_receipt(self, receipt_id: int) -> RetrievalReceipt | None:
         """Resolve a previously stored retrieval receipt."""
+
+    def record_retrieval_event(self, event: RetrievalAuditEvent) -> int:
+        """Persist one query-level retrieval audit event or fail closed."""
+        raise NotImplementedError(
+            "this repository does not expose retrieval audit events"
+        )
+
+    def has_live_items(self, project: str) -> bool:
+        """Return whether a project has any live item when supported.
+
+        The CLI uses this capability on :class:`SQLiteRepository` to
+        distinguish an unsynchronized project from a searched empty project.
+        It is deliberately concrete so existing replaceable repository
+        implementations do not become uninstantiable when the capability is
+        added.
+        """
+        raise NotImplementedError("this repository does not expose live-item state")
+
+    def has_synchronized_project(self, project: str) -> bool:
+        """Return whether a project has ever had a synchronized item.
+
+        This remains concrete so replaceable repository implementations do not
+        become uninstantiable when the CLI needs to distinguish an empty
+        synchronized project from one that has never been synchronized.
+        """
+        raise NotImplementedError(
+            "this repository does not expose synchronized-project state"
+        )
+
+    def advance_cursor(
+        self,
+        connector_id: str,
+        cursor: str,
+        *,
+        updated_at: datetime,
+        project: str | None = None,
+    ) -> None:
+        """Atomically advance a cursor without fabricating a projection row.
+
+        This additive capability is used when a source reports a completed
+        delta round with no item or tombstone writes. Existing repository
+        providers remain instantiable and must opt in before a live connector
+        relies on the capability.
+        """
+        raise NotImplementedError(
+            "this repository does not expose cursor-only advancement"
+        )
 
 
 _SCHEMA = """
@@ -220,6 +269,22 @@ CREATE TABLE IF NOT EXISTS retrieval_receipts (
     project TEXT NOT NULL,
     query TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS retrieval_audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query TEXT NOT NULL,
+    retrieval_timestamp TEXT NOT NULL,
+    principal_id TEXT NOT NULL,
+    principal_type TEXT NOT NULL,
+    principal_display_name TEXT,
+    principal_groups_json TEXT NOT NULL,
+    project TEXT NOT NULL,
+    candidate_count INTEGER NOT NULL,
+    denied_count INTEGER NOT NULL,
+    released_count INTEGER NOT NULL,
+    truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
+    status TEXT NOT NULL
+);
 """
 
 
@@ -249,10 +314,16 @@ class SQLiteRepository(Repository):
                 row = self._connection.execute(
                     "SELECT value FROM meta WHERE key = 'schema_version'"
                 ).fetchone()
-                if row is not None and int(row["value"]) != SCHEMA_VERSION:
+                stored_version = None if row is None else int(row["value"])
+                if stored_version not in (None, 1, SCHEMA_VERSION):
                     raise RuntimeError(
                         "unsupported repository schema version "
                         f"{row['value']}; expected {SCHEMA_VERSION}"
+                    )
+                if stored_version == 1:
+                    self._connection.execute(
+                        "UPDATE knowledge_items SET schema_version = ?",
+                        (SCHEMA_VERSION,),
                     )
                 self._connection.execute(
                     """
@@ -292,40 +363,7 @@ class SQLiteRepository(Repository):
         self._validate_chunks(item, normalized_chunks)
 
         with self._connection:
-            previous = self._connection.execute(
-                """
-                SELECT content_hash, tombstone
-                FROM knowledge_items
-                WHERE connector_id = ? AND source_object_id = ?
-                """,
-                (item.item_id.connector_id, item.item_id.source_object_id),
-            ).fetchone()
-            self._upsert_item(item)
-            self._upsert_permissions(item.item_id, item.permissions)
-            self._replace_chunks(item.item_id, normalized_chunks)
-
-            entry: JournalEntry | None = None
-            if previous is None or bool(previous["tombstone"]):
-                entry = JournalEntry(
-                    connector_id=item.item_id.connector_id,
-                    source_object_id=item.item_id.source_object_id,
-                    project=item.project,
-                    change_type=ChangeType.CREATED,
-                    sync_timestamp=item.sync_timestamp,
-                    content_hash=item.content_hash,
-                )
-            elif previous["content_hash"] != item.content_hash:
-                entry = JournalEntry(
-                    connector_id=item.item_id.connector_id,
-                    source_object_id=item.item_id.source_object_id,
-                    project=item.project,
-                    change_type=ChangeType.UPDATED,
-                    sync_timestamp=item.sync_timestamp,
-                    content_hash=item.content_hash,
-                    previous_content_hash=previous["content_hash"],
-                )
-            if entry is not None:
-                entry = self._append_journal(entry)
+            entry = self._sync_item_in_transaction(item, normalized_chunks)
             if cursor is not None:
                 self._upsert_cursor(
                     item.item_id.connector_id, cursor, item.sync_timestamp
@@ -341,42 +379,153 @@ class SQLiteRepository(Repository):
     ) -> JournalEntry | None:
         _require_aware(sync_timestamp, "sync_timestamp")
         with self._connection:
-            current = self._connection.execute(
-                """
-                SELECT project, content_hash, tombstone
-                FROM knowledge_items
-                WHERE connector_id = ? AND source_object_id = ?
-                """,
-                (item_id.connector_id, item_id.source_object_id),
-            ).fetchone()
-            entry: JournalEntry | None = None
-            if current is not None and not bool(current["tombstone"]):
-                self._connection.execute(
-                    """
-                    UPDATE knowledge_items
-                    SET tombstone = 1, tombstoned_at = ?, sync_timestamp = ?
-                    WHERE connector_id = ? AND source_object_id = ?
-                    """,
-                    (
-                        sync_timestamp.isoformat(),
-                        sync_timestamp.isoformat(),
-                        item_id.connector_id,
-                        item_id.source_object_id,
-                    ),
-                )
-                entry = self._append_journal(
-                    JournalEntry(
-                        connector_id=item_id.connector_id,
-                        source_object_id=item_id.source_object_id,
-                        project=current["project"],
-                        change_type=ChangeType.DELETED,
-                        sync_timestamp=sync_timestamp,
-                        previous_content_hash=current["content_hash"],
-                    )
-                )
+            entry = self._tombstone_in_transaction(item_id, sync_timestamp)
             if cursor is not None:
                 self._upsert_cursor(item_id.connector_id, cursor, sync_timestamp)
         return entry
+
+    def _sync_item_in_transaction(
+        self, item: KnowledgeItem, chunks: tuple[Chunk, ...]
+    ) -> JournalEntry | None:
+        previous = self._connection.execute(
+            """
+            SELECT content_hash, tombstone
+            FROM knowledge_items
+            WHERE connector_id = ? AND source_object_id = ?
+            """,
+            (item.item_id.connector_id, item.item_id.source_object_id),
+        ).fetchone()
+        self._upsert_item(item)
+        self._upsert_permissions(item.item_id, item.permissions)
+        self._replace_chunks(item.item_id, chunks)
+
+        entry: JournalEntry | None = None
+        if previous is None or bool(previous["tombstone"]):
+            entry = JournalEntry(
+                connector_id=item.item_id.connector_id,
+                source_object_id=item.item_id.source_object_id,
+                project=item.project,
+                change_type=ChangeType.CREATED,
+                sync_timestamp=item.sync_timestamp,
+                content_hash=item.content_hash,
+            )
+        elif previous["content_hash"] != item.content_hash:
+            entry = JournalEntry(
+                connector_id=item.item_id.connector_id,
+                source_object_id=item.item_id.source_object_id,
+                project=item.project,
+                change_type=ChangeType.UPDATED,
+                sync_timestamp=item.sync_timestamp,
+                content_hash=item.content_hash,
+                previous_content_hash=previous["content_hash"],
+            )
+        return self._append_journal(entry) if entry is not None else None
+
+    def _tombstone_in_transaction(
+        self, item_id: KnowledgeItemId, sync_timestamp: datetime
+    ) -> JournalEntry | None:
+        current = self._connection.execute(
+            """
+            SELECT project, content_hash, tombstone
+            FROM knowledge_items
+            WHERE connector_id = ? AND source_object_id = ?
+            """,
+            (item_id.connector_id, item_id.source_object_id),
+        ).fetchone()
+        if current is None or bool(current["tombstone"]):
+            return None
+        self._connection.execute(
+            """
+            UPDATE knowledge_items
+            SET tombstone = 1, tombstoned_at = ?, sync_timestamp = ?
+            WHERE connector_id = ? AND source_object_id = ?
+            """,
+            (
+                sync_timestamp.isoformat(),
+                sync_timestamp.isoformat(),
+                item_id.connector_id,
+                item_id.source_object_id,
+            ),
+        )
+        return self._append_journal(
+            JournalEntry(
+                connector_id=item_id.connector_id,
+                source_object_id=item_id.source_object_id,
+                project=current["project"],
+                change_type=ChangeType.DELETED,
+                sync_timestamp=sync_timestamp,
+                previous_content_hash=current["content_hash"],
+            )
+        )
+
+    def apply_external_round(
+        self,
+        operations: Sequence[
+            tuple[KnowledgeItemId, KnowledgeItem | None, Sequence[Chunk]]
+        ],
+        *,
+        cursor: str,
+        updated_at: datetime,
+    ) -> tuple[JournalEntry | None, ...]:
+        """Atomically apply one prepared external delta round and its cursor."""
+        if not isinstance(cursor, str) or not cursor:
+            raise ValueError("cursor must be a non-empty string")
+        _require_aware(updated_at, "updated_at")
+        normalized_operations = tuple(operations)
+        connector_id: str | None = None
+        entries: list[JournalEntry | None] = []
+        with self._connection:
+            for item_id, item, chunks in normalized_operations:
+                if not isinstance(item_id, KnowledgeItemId):
+                    raise TypeError(
+                        "external round item IDs must be KnowledgeItemId values"
+                    )
+                if connector_id is None:
+                    connector_id = item_id.connector_id
+                elif connector_id != item_id.connector_id:
+                    raise ValueError("an external round must use one connector")
+                if item is None:
+                    entries.append(self._tombstone_in_transaction(item_id, updated_at))
+                    continue
+                if item.item_id != item_id:
+                    raise ValueError("external round item ID does not match its item")
+                normalized_chunks = tuple(chunks)
+                self._validate_chunks(item, normalized_chunks)
+                entries.append(self._sync_item_in_transaction(item, normalized_chunks))
+            if connector_id is None:
+                raise ValueError("an external round must contain an operation")
+            self._upsert_cursor(connector_id, cursor, updated_at)
+        return tuple(entries)
+
+    def advance_cursor(
+        self,
+        connector_id: str,
+        cursor: str,
+        *,
+        updated_at: datetime,
+        project: str | None = None,
+    ) -> None:
+        """Atomically persist a cursor for a completed empty delta round."""
+        if not isinstance(connector_id, str) or not connector_id.strip():
+            raise ValueError("connector_id must be a non-empty string")
+        if project is not None and (
+            not isinstance(project, str) or not project.strip()
+        ):
+            raise ValueError("project must be a non-empty string when present")
+        _require_aware(updated_at, "updated_at")
+        with self._connection:
+            self._upsert_cursor(connector_id, cursor, updated_at)
+            if project is not None:
+                self._connection.execute(
+                    """
+                    INSERT INTO meta(key, value) VALUES (?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (
+                        f"synchronized_project:{project}",
+                        updated_at.isoformat(),
+                    ),
+                )
 
     def _validate_chunks(self, item: KnowledgeItem, chunks: tuple[Chunk, ...]) -> None:
         ordinals: set[int] = set()
@@ -586,6 +735,40 @@ class SQLiteRepository(Repository):
         ).fetchone()
         return None if row is None else _item_from_row(row)
 
+    def has_live_items(self, project: str) -> bool:
+        if not isinstance(project, str) or not project.strip():
+            raise ValueError("project must be a non-empty string")
+        row = self._connection.execute(
+            """
+            SELECT 1
+            FROM knowledge_items
+            WHERE project = ? AND tombstone = 0
+            LIMIT 1
+            """,
+            (project,),
+        ).fetchone()
+        return row is not None
+
+    def has_synchronized_project(self, project: str) -> bool:
+        if not isinstance(project, str) or not project.strip():
+            raise ValueError("project must be a non-empty string")
+        row = self._connection.execute(
+            """
+            SELECT 1
+            FROM knowledge_items
+            WHERE project = ?
+            LIMIT 1
+            """,
+            (project,),
+        ).fetchone()
+        if row is not None:
+            return True
+        marker = self._connection.execute(
+            "SELECT 1 FROM meta WHERE key = ?",
+            (f"synchronized_project:{project}",),
+        ).fetchone()
+        return marker is not None
+
     def get_chunks(self, item_id: KnowledgeItemId) -> tuple[Chunk, ...]:
         rows = self._connection.execute(
             """
@@ -693,6 +876,38 @@ class SQLiteRepository(Repository):
             raise RuntimeError("SQLite did not assign a receipt identifier")
         return cursor.lastrowid
 
+    def record_retrieval_event(self, event: RetrievalAuditEvent) -> int:
+        if not isinstance(event, RetrievalAuditEvent):
+            raise TypeError("event must be a RetrievalAuditEvent")
+        with self._connection:
+            cursor = self._connection.execute(
+                """
+                INSERT INTO retrieval_audit_events(
+                    query, retrieval_timestamp, principal_id, principal_type,
+                    principal_display_name, principal_groups_json, project,
+                    candidate_count, denied_count, released_count, truncated,
+                    status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.query,
+                    event.retrieval_timestamp.isoformat(),
+                    event.principal.principal_id,
+                    event.principal.principal_type.value,
+                    event.principal.display_name,
+                    _dump_tuple(event.principal.groups),
+                    event.project,
+                    event.candidate_count,
+                    event.denied_count,
+                    event.released_count,
+                    int(event.truncated),
+                    event.status.value,
+                ),
+            )
+        if cursor.lastrowid is None:
+            raise RuntimeError("SQLite did not assign an audit event identifier")
+        return cursor.lastrowid
+
     def get_receipt(self, receipt_id: int) -> RetrievalReceipt | None:
         row = self._connection.execute(
             "SELECT * FROM retrieval_receipts WHERE id = ?", (receipt_id,)
@@ -710,6 +925,18 @@ class SQLiteRepository(Repository):
         query += " ORDER BY id"
         rows = self._connection.execute(query, parameters).fetchall()
         return tuple((row["id"], _receipt_from_row(row)) for row in rows)
+
+    def get_retrieval_event(self, event_id: int) -> RetrievalAuditEvent | None:
+        row = self._connection.execute(
+            "SELECT * FROM retrieval_audit_events WHERE id = ?", (event_id,)
+        ).fetchone()
+        return None if row is None else _audit_event_from_row(row)
+
+    def list_retrieval_events(self) -> tuple[tuple[int, RetrievalAuditEvent], ...]:
+        rows = self._connection.execute(
+            "SELECT * FROM retrieval_audit_events ORDER BY id"
+        ).fetchall()
+        return tuple((row["id"], _audit_event_from_row(row)) for row in rows)
 
 
 def _item_from_row(row: sqlite3.Row) -> KnowledgeItem:
@@ -806,6 +1033,25 @@ def _receipt_from_row(row: sqlite3.Row) -> RetrievalReceipt:
         ),
         project=row["project"],
         query=row["query"],
+    )
+
+
+def _audit_event_from_row(row: sqlite3.Row) -> RetrievalAuditEvent:
+    return RetrievalAuditEvent(
+        query=row["query"],
+        retrieval_timestamp=datetime.fromisoformat(row["retrieval_timestamp"]),
+        principal=Principal(
+            principal_id=row["principal_id"],
+            principal_type=PrincipalType(row["principal_type"]),
+            display_name=row["principal_display_name"],
+            groups=_load_tuple(row["principal_groups_json"]),
+        ),
+        project=row["project"],
+        candidate_count=row["candidate_count"],
+        denied_count=row["denied_count"],
+        released_count=row["released_count"],
+        truncated=bool(row["truncated"]),
+        status=RetrievalAuditStatus(row["status"]),
     )
 
 

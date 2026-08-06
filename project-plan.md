@@ -21,7 +21,9 @@ can find evidence without knowing where the original information lives.
 - Preserve source ownership, provenance, permissions, and freshness.
 - Make connectors, search providers, embeddings, rerankers, and persistence replaceable.
 - Provide an auditable retrieval receipt for every governed evidence request.
-- Grow from a useful personal deployment to team and enterprise profiles without changing the public architecture.
+- Grow from a useful personal deployment to small-group profiles without
+  changing the public architecture. Enterprise administration is not an active
+  product goal.
 
 ## Non-negotiable constraints
 
@@ -47,7 +49,7 @@ can find evidence without knowing where the original information lives.
 
 ### Phase 1 — Personal foundation
 
-**Status:** Active / Sprint 1
+**Status:** Complete
 
 **Goal:** Reimplement the existing Employee Zero knowledge system on the lee-kb architecture — one complete local-document retrieval path proven against the real deployed corpus (~1,200 documents, 15 source roots).
 
@@ -71,25 +73,32 @@ can find evidence without knowing where the original information lives.
 - The workflow is covered by automated and end-to-end user-path tests.
 - **Acceptance:** the Chief of Staff can switch from the old `kb` commands to lee-kb without losing capability.
 
-### Phase 2 — Connector and retrieval expansion
+### Phase 2 — Personal connector expansion
 
-**Status:** Planned
+**Status:** Next / proposed; Sprint 2 closure decisions remain separately tracked
 
-**Goal:** Add the email connector and improve retrieval quality while preserving the first-release contracts.
+**Goal:** Extend Lee's Second Brain to the places his personal knowledge lives,
+while preserving the first-release contracts and avoiding enterprise
+infrastructure.
 
 **Potential components:**
 
-- Email connector: Outlook/Microsoft 365 first (decided 2026-08-03), Gmail as an early follow-on. GitHub follows in a later phase.
+- Connector conformance tests and a source capability matrix.
+- Local project directories, including `/projects`.
+- Selected OneDrive folders.
+- Outlook/Microsoft 365 mail, followed by Gmail.
+- OneNote feasibility and, if supported cleanly, a notebook/page connector.
 - MCP server exposing the same public retrieval API as the CLI.
 - Metadata filters and relationship extraction.
 - Optional semantic search provider and hybrid ranking — must demonstrate measurable improvement over the lexical golden-corpus baseline.
 - Targeted refresh (opt-in per query) when a freshness requirement cannot be met from the projection.
 
-### Phase 3 — Team deployment and governance hardening
+### Phase 3 — Small-group sharing (conditional)
 
-**Status:** Planned
+**Status:** Parked until a concrete second-user workflow exists
 
-**Goal:** Support multiple users, shared connectors, and stronger operational controls.
+**Goal:** Support shared projects and additional principals without changing the
+governed retrieval contract.
 
 **Potential components:**
 
@@ -98,9 +107,9 @@ can find evidence without knowing where the original information lives.
 - Central retrieval service and connector health operations.
 - Expanded retrieval audit reporting.
 
-### Phase 4 — Enterprise and ecosystem integration
+### Phase 4 — Enterprise infrastructure
 
-**Status:** Future
+**Status:** Not on the active roadmap
 
 **Potential components:**
 
@@ -108,6 +117,9 @@ can find evidence without knowing where the original information lives.
 - Customer-specific connector sets and tenant isolation.
 - High availability and multiple retrieval services.
 - Integrations for Agentflow, Agent-Orch, Employee Zero, and customer AI employees.
+
+These are retained as architectural possibilities, not commitments. They
+require a concrete product need before planning or implementation.
 
 ## Architecture Principles
 
@@ -153,8 +165,9 @@ can find evidence without knowing where the original information lives.
 
 ## Current Status
 
-**Phase:** Phase 0 complete; Phase 1 beginning  
-**Mode:** Collaborative implementation with human approval  
-**Next milestone:** Implement the local-document → SQLite → lexical-evidence vertical slice
+**Phase:** Phase 0 complete; Phase 1 complete; Phase 2 queued
+**Mode:** Collaborative implementation with human approval
+**Next milestone:** Prove the connector boundary and capability matrix for the
+personal connector expansion
 
 *Keep this document strategic; put task-level changes in `sprint-plan.md`.*

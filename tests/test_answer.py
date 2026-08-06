@@ -21,7 +21,7 @@ from lee_kb.contracts import (
     SourceLocator,
     compute_content_hash,
 )
-from lee_kb.governance import MissingPrincipalError
+from lee_kb.governance import MissingPrincipalError, RetrievalProviderError
 from lee_kb.repository import SQLiteRepository
 
 NOW = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
@@ -280,6 +280,57 @@ def test_denied_evidence_is_reported_inaccessible_not_not_found(repository) -> N
     assert result.absence.kind is AbsenceKind.INACCESSIBLE
     assert result.absence.withheld_count == 1
     assert result.claims == ()
+
+
+def test_answer_reports_withheld_count_alongside_a_permitted_claim(repository) -> None:
+    add_source(
+        repository,
+        "public.md",
+        "The restricted telescope launch plan exists and is scheduled.",
+    )
+    add_source(
+        repository,
+        "private.md",
+        "The restricted telescope launch plan is approved by another principal.",
+        owner="another-principal",
+    )
+
+    result = ask(repository, "restricted telescope launch plan")
+
+    assert result.claims
+    assert result.absence is None
+    assert result.withheld_count == 1
+    assert result.truncated is False
+
+
+def test_answer_reports_top_k_truncation_without_inventing_withholding(
+    repository,
+) -> None:
+    add_source(repository, "first.md", "The launch plan is ready for review.")
+    add_source(repository, "second.md", "The launch plan is ready for approval.")
+
+    result = ask(repository, "launch plan ready", top_k=1)
+
+    assert result.claims
+    assert result.withheld_count == 0
+    assert result.truncated is True
+
+
+def test_answer_can_fail_closed_as_unknown_when_provider_resolution_fails(
+    repository, monkeypatch
+) -> None:
+    import lee_kb.answer as answer_module
+
+    def failed_retrieve(*args, **kwargs):
+        raise RetrievalProviderError("simulated provider outage")
+
+    monkeypatch.setattr(answer_module, "retrieve", failed_retrieve)
+
+    result = ask(repository, "provider outage question", allow_provider_failure=True)
+
+    assert result.is_absent
+    assert result.absence.kind is AbsenceKind.UNKNOWN
+    assert "retrieval provider" in result.absence.detail
 
 
 def test_answer_module_does_not_import_repository_or_retrieval_at_runtime() -> None:

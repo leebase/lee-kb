@@ -23,8 +23,9 @@ provenance fields are defined.
 - **Canonical content hash.** `compute_content_hash()` returns lowercase
   SHA-256 hex over UTF-8 bytes. Every hash field is validated against
   `^[0-9a-f]{64}$`.
-- **Schema version.** `SCHEMA_VERSION = 1`. The v1 upgrade path is
-  wipe-and-resync; the projection is disposable, sources are authoritative.
+- **Schema version.** `SCHEMA_VERSION = 2`. Version 1 databases migrate
+  additively to add query-level retrieval audit events; the projection remains
+  disposable and sources remain authoritative.
 
 Shared enumerations:
 
@@ -258,6 +259,28 @@ once the chunk has been re-chunked and its chunk ID no longer resolves, the
 item ID, content hash, and source locator still identify exactly what was
 released.
 
+## Retrieval Audit Event
+
+`RetrievalAuditEvent` is the durable query-level audit record. Unlike a
+`RetrievalReceipt`, it is present even when no evidence is released, and it
+records denied candidates without exposing their source identity.
+
+| Field | Type | Required | Invariant |
+|-------|------|----------|-----------|
+| `query` | `str` | yes | The governed query. |
+| `retrieval_timestamp` | `datetime` | yes | When the query was evaluated. |
+| `principal` | `Principal` | yes | Who requested the query. |
+| `project` | `str` | yes | The requested scope. |
+| `candidate_count` | `int` | yes | All provider candidates before permission filtering. |
+| `denied_count` | `int` | yes | Candidates denied by permission filtering; never greater than `candidate_count`. |
+| `released_count` | `int` | yes | Evidence released after permission and freshness checks. |
+| `truncated` | `bool` | yes | Whether permitted candidates exceeded `top_k`. |
+| `status` | `RetrievalAuditStatus` | yes | `completed`, `stale_refused`, or `provider_failed`. |
+
+The event covers empty, fully denied, mixed permitted/denied, stale-refused,
+and provider-failure outcomes. It contains counts and request identity only;
+per-evidence source locators remain exclusively in release receipts.
+
 ## Synchronization Journal
 
 The repository stores a latest-state projection; documents are not versioned.
@@ -394,9 +417,8 @@ Three timestamps travel with every retrieval:
    extraction output) belongs to S1-02/S1-04 and must be pinned there, since
    it silently changes every chunk ID.
 4. **Office document types.** `DocumentType` enumerates `docx`, `xlsx`, and
-   `pptx`, but the parsing libraries needed to populate them are still
-   unapproved (they would be new runtime dependencies). The contract is ready;
-   the connector is blocked on that approval.
+   `pptx`; the approved deterministic parsing libraries are registered in the
+   local connector and documented in `docs/office-ingestion.md`.
 5. **Chunk-level permissions.** Permissions are modeled at the item level. A
    spreadsheet with per-sheet restrictions or a mail thread with a restricted
    attachment would need chunk-level overrides. Deferred until a connector

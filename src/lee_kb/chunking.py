@@ -1,8 +1,9 @@
 """Deterministic document chunking for the first retrieval slice.
 
-Markdown is split at ATX headings so a section and its heading stay together.
-Plain text is split at blank lines.  Both strategies preserve source order and
-assign zero-based ordinals after empty spans have been discarded.
+Markdown and structured Office text are split at ATX headings so a section and
+its stable source reference stay together. Plain text is split at blank lines.
+All strategies preserve source order and assign zero-based ordinals after empty
+spans have been discarded.
 """
 
 from __future__ import annotations
@@ -21,13 +22,16 @@ from .contracts import (
 
 __all__ = [
     "MARKDOWN_CHUNKER_ID",
+    "OFFICE_CHUNKER_ID",
     "PLAIN_TEXT_CHUNKER_ID",
     "chunk_document",
     "chunk_markdown",
+    "chunk_office",
     "chunk_plain_text",
 ]
 
 MARKDOWN_CHUNKER_ID = "markdown-atx-v1:1"
+OFFICE_CHUNKER_ID = "office-structured-v1:1"
 PLAIN_TEXT_CHUNKER_ID = "plain-text-paragraph-v1:1"
 
 _ATX_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+(?P<title>.*?)(?:[ \t]+#+[ \t]*)?$")
@@ -51,14 +55,20 @@ def chunk_document(
 ) -> tuple[Chunk, ...]:
     """Chunk normalized document text using its declared document type.
 
-    Markdown uses heading sections.  Every other text-bearing document type
-    falls back to deterministic paragraph chunks; format-specific extraction
-    can introduce a separate versioned chunker later.
+    Markdown and parser-normalized Office documents use heading sections.
+    Every other text-bearing document type falls back to deterministic
+    paragraph chunks.
     """
     if not isinstance(document_type, DocumentType):
         raise TypeError("document_type must be a DocumentType")
     if document_type is DocumentType.MARKDOWN:
         return chunk_markdown(text, item_id=item_id, project=project)
+    if document_type in {
+        DocumentType.DOCX,
+        DocumentType.XLSX,
+        DocumentType.PPTX,
+    }:
+        return chunk_office(text, item_id=item_id, project=project)
     return chunk_plain_text(text, item_id=item_id, project=project)
 
 
@@ -68,7 +78,38 @@ def chunk_markdown(
     item_id: KnowledgeItemId,
     project: str,
 ) -> tuple[Chunk, ...]:
-    """Split Markdown into stable, heading-aware source slices.
+    """Split Markdown into stable, heading-aware source slices."""
+    return _chunk_markdown(
+        text,
+        item_id=item_id,
+        project=project,
+        chunker_id=MARKDOWN_CHUNKER_ID,
+    )
+
+
+def chunk_office(
+    text: str,
+    *,
+    item_id: KnowledgeItemId,
+    project: str,
+) -> tuple[Chunk, ...]:
+    """Split parser-normalized Office text into citation-bearing sections."""
+    return _chunk_markdown(
+        text,
+        item_id=item_id,
+        project=project,
+        chunker_id=OFFICE_CHUNKER_ID,
+    )
+
+
+def _chunk_markdown(
+    text: str,
+    *,
+    item_id: KnowledgeItemId,
+    project: str,
+    chunker_id: str,
+) -> tuple[Chunk, ...]:
+    """Split heading-structured text into stable source slices.
 
     ATX-looking lines inside fenced code blocks are content, not headings.
     Repeated heading labels retain a zero-based occurrence number so citations
@@ -118,7 +159,7 @@ def chunk_markdown(
         spans,
         item_id=item_id,
         project=project,
-        chunker_id=MARKDOWN_CHUNKER_ID,
+        chunker_id=chunker_id,
     )
 
 

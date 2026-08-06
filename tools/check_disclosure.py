@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scan every tracked file for the absolute-host-path disclosure class.
+"""Scan repository files for the absolute-host-path disclosure class.
 
 This repository is public. Four separate review findings (S2-R-01, S2-R-02,
 S2-R-12, S3-R-14) were the same defect in four different places: a real host
@@ -12,7 +12,7 @@ This checks the whole class over the whole tree, mechanically:
     python3 tools/check_disclosure.py
 
 Exits 0 when clean, 1 with every hit listed. Intended for the verification
-step of every sprint and before any push.
+step of every sprint and before any push; ignored local artifacts are excluded.
 """
 
 from __future__ import annotations
@@ -59,10 +59,10 @@ PLACEHOLDER_MARKERS: tuple[str, ...] = (
 )
 
 
-def tracked_files() -> list[Path]:
-    """Return every file git tracks, so nothing is scanned by hand."""
+def repository_files() -> list[Path]:
+    """Return tracked and non-ignored working-tree files."""
     output = subprocess.run(
-        ["git", "ls-files", "-z"],
+        ["git", "ls-files", "-co", "--exclude-standard", "-z"],
         capture_output=True,
         text=True,
         check=True,
@@ -92,13 +92,14 @@ def scan(paths: list[Path]) -> list[tuple[Path, int, str, str]]:
 
 
 def main() -> int:
-    hits = scan(tracked_files())
+    hits = scan(repository_files())
     if not hits:
         print(
-            "check_disclosure: clean — no host paths or credentials in tracked files."
+            "check_disclosure: clean — no host paths or credentials in "
+            "repository files."
         )
         return 0
-    print(f"check_disclosure: {len(hits)} disclosure hit(s) in tracked files:")
+    print(f"check_disclosure: {len(hits)} disclosure hit(s) in repository files:")
     for path, number, label, line in hits:
         print(f"  {path}:{number}: {label}")
         print(f"      {line}")

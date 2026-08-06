@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from lee_kb.answer import answer
 from lee_kb.answer_conflict import detect_conflicts, retain_conflict_sides
 from lee_kb.answer_contracts import Answer, Claim, Confidence, EvidenceRef, Side
 from lee_kb.answer_evidence import select_evidence
@@ -225,6 +226,61 @@ def test_noncompeting_same_authority_statements_do_not_create_a_conflict(
     _, selection = selection_for(repository, "retention policy")
 
     assert detect_conflicts(selection) == ()
+
+
+def test_negation_in_another_clause_does_not_hide_a_conflict(repository) -> None:
+    add_source(
+        repository,
+        "encrypted.md",
+        "The Nimbus archive is encrypted and no external link is present.",
+        authority=Authority.DERIVED,
+        source_timestamp=NOW - timedelta(days=1),
+    )
+    add_source(
+        repository,
+        "not-encrypted.md",
+        "The Nimbus archive is not encrypted and no external link is present.",
+        authority=Authority.DERIVED,
+        source_timestamp=NOW,
+    )
+
+    result = answer(
+        repository,
+        "Is the Nimbus archive encrypted?",
+        principal=LEE,
+        project=DEFAULT_PROJECT,
+        clock=lambda: NOW,
+    )
+
+    assert len(result.conflicts) == 1
+    assert len(result.claims) == 2
+
+
+def test_unrelated_negative_elaboration_does_not_create_a_conflict(repository) -> None:
+    add_source(
+        repository,
+        "required.md",
+        "The Fennel gate is required.",
+        authority=Authority.DERIVED,
+        source_timestamp=NOW - timedelta(days=1),
+    )
+    add_source(
+        repository,
+        "required-owner.md",
+        "The Fennel gate is required and no owner is assigned.",
+        authority=Authority.DERIVED,
+        source_timestamp=NOW,
+    )
+
+    result = answer(
+        repository,
+        "What is the Fennel gate requirement?",
+        principal=LEE,
+        project=DEFAULT_PROJECT,
+        clock=lambda: NOW,
+    )
+
+    assert result.conflicts == ()
 
 
 def test_detect_conflicts_rejects_an_ungoverned_iterable() -> None:

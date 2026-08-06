@@ -1,8 +1,12 @@
 # Lee Knowledge Base (lee-kb)
 
-Lee Knowledge Base is a governed knowledge fabric for searching knowledge that
-remains in its original systems. It connects sources, synchronizes a normalized
-projection, and returns permission-aware evidence with provenance and freshness.
+Lee Knowledge Base is a personal-first, governed Second Brain for knowledge
+that remains in its original systems. It connects sources, synchronizes a
+normalized projection, and returns permission-aware evidence with provenance
+and freshness.
+
+It is designed to grow from Lee's personal deployment to small shared projects,
+not to become an enterprise administration platform.
 
 lee-kb is not a replacement for source systems, an execution engine, or an
 authorization engine. Retrieval answers “what evidence exists?”; execution
@@ -13,7 +17,8 @@ authority remains with the system that owns the action.
 Sprint 1 (Personal Foundation) delivers one governed retrieval path: local
 documents on disk synchronize into a normalized SQLite projection and are
 searchable through lexical retrieval, with permission filtering, citations,
-freshness reporting, and retrieval receipts on every result. Sprint 3 adds a
+freshness reporting, and retrieval receipts on every result. Office formats
+now use the same governed path. Sprint 3 adds a
 second, higher-level surface on top of that same retrieval path: `lee-kb ask`
 returns a governed, cited *answer* — assembled claims, confidence,
 conflicts, and absences — instead of raw evidence rows. See
@@ -23,15 +28,25 @@ conflicts, and absences — instead of raw evidence rows. See
 Delivered in this release:
 
 - personal SQLite deployment, driven by the `lee-kb` CLI (`init`, `sync`,
-  `search`, `ask`)
+  `auth`, `search`, `ask`)
 - a local-file connector reading `sources.toml`-compatible configuration, for
-  Markdown and plain-text documents
+  Markdown, plain-text, Word, Excel, and PowerPoint documents
+- deterministic Office extraction for `.docx`, `.xlsx`, and `.pptx`, with
+  paragraph, sheet/cell, slide, and speaker-note citation references (see
+  `docs/office-ingestion.md`)
 - deterministic chunking and BM25-ranked lexical retrieval
 - fail-closed authorization: every search or ask requires a principal, and
   unauthorized evidence is filtered before assembly, never returned
 - source citations, freshness (sync age) reporting, and a persisted retrieval
-  receipt for every piece of evidence released
+  receipt for every piece of evidence released, plus a query-level audit event
+  for empty, denied, stale-refused, and provider-failure outcomes
 - an append-only sync journal and tombstone-based deletion (no hard deletes)
+- a reusable Microsoft Graph foundation: delegated device-code authentication,
+  secure token lifecycle, retry/throttling/rate limiting, pagination, delta
+  recovery, and normalized errors
+- a live-capable one-folder Outlook/Microsoft 365 transport wired through the
+  common connector, SQLite checkpoint, citation, freshness, and audit path
+  (real account proof remains operator-run and is not part of the offline suite)
 - an offline golden-evaluation harness with a recorded lexical baseline (see
   `docs/golden-baseline.md`)
 - the governed `answer()` surface (`lee-kb ask`): claim assembly, conflict
@@ -42,18 +57,13 @@ Delivered in this release:
 
 Explicitly deferred, not implemented in this release:
 
-- **Office formats (`.docx`, `.xlsx`, `.pptx`).** These remain required v1
-  product scope. `DocumentType` and the local-file connector's format-handler
-  registry (`src/lee_kb/connectors/local_files.py`) already support adding
-  them without redesign, but no parsing library is registered yet — new
-  runtime dependencies need explicit approval first.
 - **An LLM-backed synthesis provider for `ask`.** `SynthesisProvider` is a
   one-method protocol (`docs/answer-architecture.md`, Synthesis Providers)
   specified for exactly this purpose. `answer()` ships with only
   `DeterministicSynthesisProvider`, a template renderer with no model call —
   it is offline and auditable, but not natural prose. An LLM-backed
-  implementation is unimplemented pending the same runtime-dependency
-  approval that gates office-format parsing.
+  implementation is unimplemented pending explicit runtime-dependency
+  approval.
 - **The curated golden benchmark.** `docs/golden-baseline.md` records a
   20-question corpus generated from this repository's own documents; it
   proves the evaluation harness, not Lee's real recurring Chief of Staff
@@ -65,12 +75,30 @@ Explicitly deferred, not implemented in this release:
   projection built for the test; nothing yet exercises `ask` against a live,
   continuously-synchronized filesystem corpus (freshness drift, resync
   during use, and so on) — a deferred extension.
-- Semantic search, reranking, the email connector, and multi-user deployment
-  are later phases.
+- OneDrive and OneNote connectors, semantic search, reranking, and multi-user
+  deployment are later phases. OneNote is explicitly not implemented in this
+  sprint.
+
+## Personal Connector Roadmap
+
+The connector conformance and capability mapping slice is delivered. The next
+operator-gated step is a real Outlook mailbox proof; the source roadmap is:
+
+- local project directories, including `/projects`;
+- selected OneDrive folders;
+- Outlook/Microsoft 365 mail;
+- OneNote notebooks and pages;
+- Gmail.
+
+These sources remain authoritative. Each connector will preserve stable source
+identity, incremental state, permission metadata, freshness, deletion versus
+temporary failure, and governed citations. The shared Microsoft Graph
+foundation and Outlook transport are implemented; OneDrive remains a future
+connector, and OneNote is design-only.
 
 ## Development setup
 
-The project targets Python 3.10 or newer. Use a virtual environment, then
+The project targets Python 3.11 or newer. Use a virtual environment, then
 install the package with development tools:
 
 ```bash
@@ -98,6 +126,41 @@ variable). Sync is user-driven; there is no background daemon.
 lee-kb --help
 lee-kb --version
 ```
+
+### Microsoft Graph Outlook
+
+Configure a public/native Microsoft client, one account binding, and one
+Outlook folder in `config.toml`; keep tokens out of the file:
+
+```toml
+[microsoft_graph]
+client_id = "public-native-app-client-id"
+tenant = "common"
+scopes = ["Mail.Read", "User.Read"]
+
+[microsoft_graph.accounts.personal]
+user_id = "lee@example.com"
+
+[outlook.inbox]
+account = "personal"
+folder_id = "<mail-folder-id>"
+folder_name = "Inbox"
+project = "default"
+```
+
+Use the device flow and then the same governed retrieval surfaces:
+
+```bash
+lee-kb auth login --account personal
+lee-kb sync outlook inbox
+lee-kb search "launch review" --principal lee@example.com
+lee-kb ask "what did I say about the launch review?" --principal lee@example.com
+lee-kb auth revoke --account personal
+```
+
+The default Linux token store uses the OS Secret Service and fails closed when
+it is unavailable. See `docs/microsoft-graph.md` for token lifecycle,
+checkpoint recovery, OneDrive readiness, and the explicit OneNote deferral.
 
 ### 1. Initialize configuration
 
@@ -141,6 +204,12 @@ source changes reports everything as unchanged and creates no duplicate rows;
 a changed file replaces its projection and journals the previous content
 hash; a removed file is tombstoned, not hard-deleted, and excluded from
 ordinary search.
+
+Temporary root, subtree, or file read failures are reported as skipped and are
+not treated as deletions. A root-scoped sync also reports files claimed by a
+more-specific overlapping root. After the last synchronized item is deleted,
+`ask` reports a searched `not_found`; a project that has never synchronized
+remains `unknown`.
 
 `sync` accepts two additional overrides not exposed on `search`:
 

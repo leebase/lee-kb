@@ -55,12 +55,14 @@ __all__ = [
     "Evidence",
     "FreshnessReport",
     "RetrievalReceipt",
+    "RetrievalAuditStatus",
+    "RetrievalAuditEvent",
     "EvidenceBundle",
     "JournalEntry",
 ]
 
 #: Version of the persisted projection schema these contracts describe.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 #: The single project used by a personal deployment.
 DEFAULT_PROJECT = "default"
@@ -615,6 +617,55 @@ class RetrievalReceipt:
             raise ValueError("chunk_id.item_id must match knowledge_item_id")
         if self.chunk_id.content_hash != self.content_hash:
             raise ValueError("content_hash must match chunk_id.content_hash")
+
+
+class RetrievalAuditStatus(str, Enum):
+    """Outcome recorded for one governed retrieval query."""
+
+    COMPLETED = "completed"
+    STALE_REFUSED = "stale_refused"
+    PROVIDER_FAILED = "provider_failed"
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalAuditEvent:
+    """Durable query-level governance facts, including empty results."""
+
+    query: str
+    retrieval_timestamp: datetime
+    principal: Principal
+    project: str
+    candidate_count: int
+    denied_count: int
+    released_count: int
+    truncated: bool
+    status: RetrievalAuditStatus = RetrievalAuditStatus.COMPLETED
+
+    def __post_init__(self) -> None:
+        _require_text(self.query, "query")
+        _require_aware(self.retrieval_timestamp, "retrieval_timestamp")
+        if not isinstance(self.principal, Principal):
+            raise TypeError("principal must be a Principal")
+        _require_project(self.project)
+        for value, name in (
+            (self.candidate_count, "candidate_count"),
+            (self.denied_count, "denied_count"),
+            (self.released_count, "released_count"),
+        ):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise TypeError(f"{name} must be an int")
+            if value < 0:
+                raise ValueError(f"{name} must be zero or greater")
+        if self.denied_count > self.candidate_count:
+            raise ValueError("denied_count cannot exceed candidate_count")
+        if self.released_count + self.denied_count > self.candidate_count:
+            raise ValueError(
+                "released_count plus denied_count cannot exceed candidate_count"
+            )
+        if not isinstance(self.truncated, bool):
+            raise TypeError("truncated must be a bool")
+        if not isinstance(self.status, RetrievalAuditStatus):
+            raise TypeError("status must be a RetrievalAuditStatus")
 
 
 @dataclass(frozen=True, slots=True)

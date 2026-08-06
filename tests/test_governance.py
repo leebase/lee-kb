@@ -2,7 +2,7 @@
 lee_kb.governance.retrieve().
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -10,15 +10,22 @@ from lee_kb.chunking import chunk_document
 from lee_kb.contracts import (
     DEFAULT_PROJECT,
     DocumentType,
+    FreshnessRequirement,
     KnowledgeItem,
     KnowledgeItemId,
     PermissionSet,
     Principal,
+    RetrievalAuditStatus,
     SourceLocator,
     Visibility,
     compute_content_hash,
 )
-from lee_kb.governance import MissingPrincipalError, retrieve
+from lee_kb.governance import (
+    MissingPrincipalError,
+    RetrievalProviderError,
+    StaleEvidenceError,
+    retrieve,
+)
 from lee_kb.repository import SQLiteRepository
 
 SOURCE_TIME = datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc)
@@ -160,6 +167,112 @@ def test_receipt_persisted_for_every_evidence_item_including_empty_results(
     assert empty_bundle.evidence == ()
     assert empty_bundle.receipts == ()
     assert repository.list_receipts() == ((stored_id, stored_receipt),)
+
+
+def test_query_audit_event_records_empty_denied_and_mixed_results(repository) -> None:
+    empty_bundle = run(repository, "audit event empty lexeme")
+
+    empty_event_id, empty_event = repository.list_retrieval_events()[-1]
+    assert empty_bundle.evidence == ()
+    assert empty_event_id > 0
+    assert empty_event.query == "audit event empty lexeme"
+    assert empty_event.candidate_count == 0
+    assert empty_event.denied_count == 0
+    assert empty_event.released_count == 0
+    assert empty_event.status is RetrievalAuditStatus.COMPLETED
+    assert repository.get_retrieval_event(empty_event_id) == empty_event
+
+    sync_markdown(
+        repository,
+        "audit-private.md",
+        "audit event denied lexeme",
+        owner="another-principal",
+    )
+    denied_bundle = run(
+        repository,
+        "audit event denied lexeme",
+        principal=STRANGER,
+    )
+    _, denied_event = repository.list_retrieval_events()[-1]
+    assert denied_bundle.evidence == ()
+    assert denied_event.candidate_count == 1
+    assert denied_event.denied_count == 1
+    assert denied_event.released_count == 0
+
+    sync_markdown(
+        repository,
+        "audit-public.md",
+        "mixedauditunique",
+        allowed_principals=("mallory",),
+    )
+    sync_markdown(
+        repository,
+        "audit-mixed-private.md",
+        "mixedauditunique",
+        owner="another-principal",
+    )
+    mixed_bundle = run(
+        repository,
+        "mixedauditunique",
+        principal=STRANGER,
+    )
+    _, mixed_event = repository.list_retrieval_events()[-1]
+    assert len(mixed_bundle.evidence) == 1
+    assert mixed_event.candidate_count == 2
+    assert mixed_event.denied_count == 1
+    assert mixed_event.released_count == 1
+    assert mixed_event.status is RetrievalAuditStatus.COMPLETED
+
+
+def test_stale_refusal_does_not_persist_release_receipts(repository) -> None:
+    sync_markdown(repository, "stale.md", "stale release lexeme")
+
+    with pytest.raises(StaleEvidenceError):
+        run(
+            repository,
+            "stale release",
+            freshness=FreshnessRequirement(
+                max_staleness=timedelta(hours=1),
+                fail_on_stale=True,
+            ),
+        )
+
+    assert repository.list_receipts() == ()
+    _, event = repository.list_retrieval_events()[-1]
+    assert event.status is RetrievalAuditStatus.STALE_REFUSED
+    assert event.released_count == 0
+
+
+def test_provider_failure_is_recorded_as_a_query_audit_event(
+    repository, monkeypatch
+) -> None:
+    from lee_kb import governance
+
+    def fail(_request):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(governance.LexicalRetriever, "search", fail)
+
+    with pytest.raises(RetrievalProviderError):
+        run(repository, "provider failure lexeme")
+
+    _, event = repository.list_retrieval_events()[-1]
+    assert event.query == "provider failure lexeme"
+    assert event.status is RetrievalAuditStatus.PROVIDER_FAILED
+    assert event.candidate_count == 0
+    assert event.released_count == 0
+
+
+def test_missing_query_audit_capability_fails_closed(repository, monkeypatch) -> None:
+    sync_markdown(repository, "unaudited.md", "unaudited release lexeme")
+
+    def unavailable(_event):
+        raise NotImplementedError("audit events are unavailable")
+
+    monkeypatch.setattr(repository, "record_retrieval_event", unavailable)
+
+    with pytest.raises(NotImplementedError, match="audit events are unavailable"):
+        run(repository, "unaudited release")
 
 
 def test_out_of_project_evidence_is_excluded(repository) -> None:

@@ -62,7 +62,85 @@ To size the real gap for Lee's Priority 2 decision, a direct, read-only filesyst
 | .pptx | 2 |
 | **Total** | **39** |
 
-Two roots account for most of it: `ai-employee-book` (21 `.docx`) and `tviq` (9 files spanning all three extensions); the remaining 9 files are spread across `agent-orch`, `pr-business`, `jobsearch`, and `factory`. Ten of the 15 roots have zero office-format files present. This count is a raw filesystem tally (not filtered by `include`/`exclude`/git-ignore), so it is an upper bound on what the connector would actually pick up once both parsing support and matching `include` patterns exist — but it is a real, non-zero number the connector-level measurement alone cannot see.
+Two roots account for most of it: `ai-employee-book` (21 `.docx`) and `tviq` (9 files spanning all three extensions); the remaining 9 files are spread across `agent-orch`, `pr-business`, `jobsearch`, and `factory`. Nine of the 15 roots have zero office-format files present. This count is a raw filesystem tally (not filtered by `include`/`exclude`/git-ignore), so it is an upper bound on what the connector would actually pick up once both parsing support and matching `include` patterns exist — but it is a real, non-zero number the connector-level measurement alone cannot see.
+
+## Office Rollout Measurement — 2026-08-04
+
+The approved Office parsers and narrow include changes were then run against a
+fresh projection. The direct inventory was deduplicated by resolved source
+file and accounted for all **39** live Office files:
+
+| Classification | Count |
+|---|---:|
+| Indexed | 10 |
+| Unsupported embedded content | 5 |
+| Git-ignored | 1 |
+| Existing generated/excluded scope | 2 |
+| Deliberately outside `ai-employee-book` include scope | 21 |
+| **Total** | **39** |
+
+No Office candidate failed as malformed, unreadable, or temporarily
+inaccessible on this pass. The five unsupported candidates were not
+partially indexed. No macro, embedded binary, or unsupported visual content
+entered the projection. The sync summary reported 5 skipped unsupported
+objects, 16 git-ignored candidates across the full corpus, 6 git-ignore
+status-unresolved candidates, 21 Office files outside include scope, and 8
+Office exclusion hits; the latter two diagnostics count overlapping/root and
+temporary candidates separately, while the 39-file table above is the
+deduplicated live inventory.
+
+### Office Projection Shape
+
+| Document type | Live documents | Chunks |
+|---|---:|---:|
+| Markdown | 1,225 | 12,808 |
+| DOCX | 7 | 694 |
+| XLSX | 3 | 5,099 |
+| PPTX | 0 | 0 |
+| **Total** | **1,235** | **18,601** |
+
+The fresh projection's per-root totals were:
+
+| Root | Documents | Chunks |
+|---|---:|---:|
+| agent-board | 6 | 295 |
+| agent-in-a-box | 286 | 2,204 |
+| agent-orch | 100 | 2,006 |
+| ai-employee-book | 70 | 815 |
+| auto-orch | 70 | 557 |
+| drawdb | 6 | 93 |
+| erd-tool | 35 | 234 |
+| factory | 58 | 565 |
+| jobsearch | 408 | 4,705 |
+| lee-sf-rbac | 19 | 112 |
+| leeos | 47 | 629 |
+| linux-utilities | 60 | 524 |
+| pr-business | 4 | 152 |
+| pr-research | 2 | 39 |
+| tviq | 64 | 5,671 |
+
+### Performance Comparison
+
+The comparison uses the prior clean post-repair baseline in this report and a
+fresh database for the Office rollout. The source corpus also changed between
+measurements, so the document/chunk delta includes ordinary corpus growth in
+addition to Office ingestion.
+
+| Metric | Prior clean baseline | Office rollout | Delta |
+|---|---:|---:|---:|
+| Live documents | 1,213 | 1,235 | +22 |
+| Chunks | 12,699 | 18,601 | +5,902 |
+| Projection size | 21,020,672 bytes | 30,396,416 bytes | +9,375,744 bytes |
+| Wall-clock elapsed | 2:51.18 | 3:03.63 | +12.45s (+7.3%) |
+| User time | 140.78s | 153.98s | +13.20s (+9.4%) |
+| System time | 23.44s | 21.28s | −2.16s (−9.2%) |
+| Peak resident set | 4,568,212 KB | 121,336 KB | −4,446,876 KB (−97.3%) |
+
+The largest chunk increase is the intentionally indexed worksheet sample,
+which contributes 5,008 row/cell chunks. The discovery traversal was also
+changed from materializing recursive `Path` results to an error-reporting
+`os.walk` traversal, which accounts for the large peak-memory reduction. No
+external model call or network operation was used.
 
 ## Retrieval Behavior
 
@@ -100,24 +178,23 @@ Retrieval (`lee-kb search`, wall-clock per query, real corpus already synced) �
 | Category queries (2 per golden category) | 10 | 0.286s – 0.766s | 0.443s |
 | Common-word stress queries | 2 | 0.465s – 1.521s | 0.993s |
 
-The single-common-word query ("the") was the slowest of all 12 at **1.521s**, roughly 3.4x the category-query mean — the visible worst case of OR-matcher fetch-to-exhaustion on this corpus size. Not measured: latency behavior at a materially larger corpus size (e.g. after office-format ingestion), which would require re-running this same query set once that corpus exists.
+The single-common-word query ("the") was the slowest of all 12 at **1.521s**, roughly 3.4x the category-query mean — the visible worst case of OR-matcher fetch-to-exhaustion on the prior corpus size. Retrieval latency was not re-measured after Office expansion; that remains an open decision.
 
 ## Parity Gaps
 
 - Corpus shape closely tracks the Employee Zero reference snapshot in `research/employee-zero-kb-reference.md` (1,209 documents / 12,634 chunks at that inspection's generation 249) against this run's 1,213 documents / 12,699 chunks. 13 of 15 roots match the reference exactly or within a handful of chunks; the largest drift is in `auto-orch` (+3 documents, +48 chunks vs. the reference) and `agent-orch` (+1 document, +15 chunks vs. the reference) — consistent with ordinary content growth in those repos since the reference was captured, not a discovery gap, given the other 13 roots line up closely.
 - All 13 declared canonical-override promotions took effect exactly as configured; none were skipped, and none leaked onto an unexpected item.
-- Zero fetch failures and zero token-shaped-secret hits across the entire real corpus — a clean sync end to end on this pass.
-- The office-format gap is real and larger than the connector's own summary line can show: 39 office-format files sit inside the configured root paths today, invisible to the sync summary because the deployed `include` patterns never request them. Closing this gap requires both approving parsing dependencies *and* extending the relevant roots' `include` patterns — either alone is insufficient.
-- git-ignored (300 pre-repair, **14 post-repair**) and git-ignore-unresolved (5, unchanged) are both accounted for and non-blocking; unresolved candidates are still indexed, matching the connector's "count it, don't drop it" contract. The pre-repair 300 double-counted candidates in the two overlapping-root regions.
-- OR-matcher fetch-to-exhaustion is now measured, not just theorized: worst case ~1.5s on the current ~1,213-document corpus. Whether this degrades materially once the office-format expansion increases corpus size is not measured here.
+- Five Office candidates failed closed as unsupported package content, with zero malformed, unreadable, or temporary-access failures; no token-shaped-secret hits were indexed.
+- The Office gap is closed for the intended scope: all 39 live Office files are indexed or explicitly classified in the deduplicated accounting table. Narrow include changes, generated-file exclusions, Git-ignore handling, and the deliberate `ai-employee-book` scope are all visible.
+- git-ignored (**16** full-corpus candidates) and git-ignore-unresolved (**6**) are both accounted for and non-blocking; unresolved candidates are still indexed, matching the connector's "count it, don't drop it" contract. The Office table deduplicates physical files, while the sync diagnostics retain root-level candidate counts.
+- OR-matcher fetch-to-exhaustion remains measured at ~1.5s on the prior corpus; the expanded Office projection has not yet had the stress query set re-measured.
 - Post-repair re-measurement (this run, database deleted first for a clean full sync): the S2-R-04 nested-root repair found two real overlaps in the deployed config — `jobsearch`/`agent-in-a-box` and `pr-business`/`pr-research` (confirmed via the connector's own health check, which reports root names only, no paths) — and now has the deepest matching root claim each overlapping file. This changed the sync's `git-ignored` diagnostic counter from 300 to 14 (`git-ignore status unresolved` stayed at 5), because pre-repair, both roots in each overlapping pair independently discovered and separately counted the same ignored candidates in the shared region. It did **not** change indexed document or chunk counts, per-root or total (see Performance) — the overlap region evidently held no file that both roots' `include` patterns matched outside of already-ignored candidates, so no duplicate knowledge item was ever actually created; the repair corrected an inflated diagnostic count and closed the class of bug (duplicate citable evidence for one file) rather than fixing an already-manifested duplication in this specific corpus.
 - The S2-R-03 single-discovery-pass repair changed measured sync performance, not corpus shape: wall-clock dropped ~46.6% (5:20.37 → 2:51.18) with peak memory unchanged within noise, consistent with eliminating one of two redundant full discovery passes that the pre-repair sync ran per invocation.
 - Preserved validator evidence for this step's lineage (not rerun here): `pytest tests/` passed on two independent runs (exit 0, 11.098397s and 11.557784s), tied to the S2-R-04 nested-root and S2-R-03 single-discovery-pass acceptance criteria; `pytest tests/golden/` passed on one independent run (exit 0, 8.119346s), tied to the S1-R-16 baseline-as-contract acceptance criterion. These establish the repaired code and the golden-corpus contract were healthy going into this real-corpus re-measurement.
 
 ## Recommended Next Actions
 
-1. **Priority 2 (office-format libraries):** treat 39 files (32 `.docx`, 5 `.xlsx`, 2 `.pptx`), concentrated in `ai-employee-book` and `tviq`, as the real target size. Approving parsing dependencies alone will not surface these — the affected roots' `include` patterns also need extending, since today they structurally exclude office extensions before any handler lookup happens.
-2. **Priority 5 (OR-matcher):** the worst-case query (a single ubiquitous token) now has a real number on the real corpus (~1.5s). Decide whether that is acceptable as-is or worth a page-size cap / early-exit heuristic before the corpus grows further via office-format ingestion.
-3. **Priority 7 (curate the real golden benchmark):** the two category queries whose top citation was topically adjacent but not canonical (job-search-log and README-map categories) are good raw material — they show a real ranking edge case on Lee's actual corpus, which the generated seed corpus in `docs/golden-baseline.md` cannot exercise.
-4. Treat the **post-repair** sync wall-clock (**2:51.18**) and peak memory (**~4.36 GiB**) as the baseline for future full-resync performance work; the pre-repair figures (5:20.37, ~4.37 GiB) are retained above only for comparison. Peak memory is essentially unchanged by the S2-R-03 repair and remains an open question. Re-measure after the office-format roots are extended, since both figures will move with corpus size.
-5. The original measurement pass surfaced no correctness defects in the sync itself (zero fetch failures, zero unexpected overrides, all 15 roots reachable). The independent review of that pass did surface defects, and three were subsequently repaired and re-measured here: S2-R-04 (nested roots could produce duplicate evidence), S2-R-03 (the corpus was walked twice per sync), and S2-R-13 (an unreachable required root failed silently).
+1. **Priority 5 (OR-matcher):** the worst-case query (a single ubiquitous token) has a prior real-corpus measurement of ~1.5s. Decide whether that is acceptable as-is or worth a page-size cap / early-exit heuristic at the 1,235-document / 18,601-chunk scale.
+2. **Priority 7 (curate the real golden benchmark):** the two category queries whose top citation was topically adjacent but not canonical (job-search-log and README-map categories) are good raw material — they show a real ranking edge case on Lee's actual corpus, which the generated seed corpus in `docs/golden-baseline.md` cannot exercise.
+3. Treat the final Office rollout sync wall-clock (**3:03.63**) and peak memory (**~118.5 MiB**) as the current full-resync baseline; the prior clean baseline (2:51.18, ~4.36 GiB) is retained for comparison. The lower peak reflects the error-reporting `os.walk` traversal, not a reduced corpus.
+4. The original measurement pass surfaced no correctness defects in the sync itself (zero fetch failures, zero unexpected overrides, all 15 roots reachable). The independent reviews and this slice repaired nested-root claiming, single-pass discovery, required-root health gating, Office parser safety, and deterministic answer-layer reporting; remaining advisories are recorded in the cold review disposition.

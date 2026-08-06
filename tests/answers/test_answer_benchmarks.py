@@ -182,24 +182,146 @@ The deployment channel for Equinox is disabled.
 )
 
 
-CONTRADICTION_CASES = (
+NON_COMPETING_CASES = (
+    (
+        "paraphrase-by-voice",
+        "Who owns the Perseus runbook?",
+        "The platform team owns the Perseus runbook.",
+        "The Perseus runbook is owned by the platform team.",
+    ),
+    (
+        "elaboration-by-added-clause",
+        "What does the Halcyon policy retain?",
+        "The Halcyon policy retains audit logs.",
+        "Audit logs are retained by the Halcyon policy under section 4.",
+    ),
+    (
+        "synonym-restatement",
+        "What does the Cygnus review require?",
+        "The Cygnus review mandates signed approval.",
+        "The Cygnus review requires signed approval.",
+    ),
+    (
+        "differing-detail-level",
+        "Where does the Vega ingest queue run?",
+        "The Vega ingest queue runs in the north region.",
+        "The Vega ingest queue runs in the north region during overnight imports.",
+    ),
+    (
+        "same-fact-from-two-roots",
+        "Who is the Aquila registry deployment owner?",
+        "The Aquila registry lists the deployment owner as operations.",
+        "The deployment owner is listed as operations in the Aquila registry.",
+    ),
+    (
+        "formatting-only",
+        "What is the Orion release cadence?",
+        "Orion release cadence: weekly.",
+        "Orion release cadence -- weekly.",
+    ),
+    (
+        "emphatic-agreement",
+        "What is the Fennel gate requirement?",
+        "The Fennel gate is required.",
+        "The Fennel gate is required, not optional.",
+    ),
+    (
+        "negated-opposite-agreement",
+        "What is the Fennel gate requirement?",
+        "The Fennel gate is required.",
+        "The Fennel gate is not optional.",
+    ),
+)
+
+
+CONTRADICTING_CASES = (
     (
         "enabled-versus-turned-off",
         "What is the state of the release gate for Kestrel?",
         "The release gate for Kestrel is enabled.",
         "The release gate for Kestrel is turned off.",
+        Authority.DERIVED,
+        Authority.DERIVED,
     ),
     (
         "permitted-versus-forbidden",
         "What is the export policy for Vega?",
         "The export policy for Vega is permitted.",
         "The export policy for Vega is forbidden.",
+        Authority.DERIVED,
+        Authority.DERIVED,
     ),
     (
         "numeric-divergence",
         "What is the retention window for Lyra in days?",
         "The retention window for Lyra is 30 days.",
         "The retention window for Lyra is 90 days.",
+        Authority.DERIVED,
+        Authority.DERIVED,
+    ),
+    (
+        "canonical-versus-derived",
+        "Which corridor does the Draco route use?",
+        "The Draco route uses the eastern corridor.",
+        "The Draco route uses the western corridor.",
+        Authority.CANONICAL,
+        Authority.DERIVED,
+    ),
+    (
+        "morphological-antonym-outside-word-list",
+        "Is the Phoenix deployment restricted?",
+        "The Phoenix deployment is restricted.",
+        "The Phoenix deployment is unrestricted.",
+        Authority.DERIVED,
+        Authority.DERIVED,
+    ),
+    (
+        "negated-non-value-word",
+        "Is the Nimbus archive encrypted?",
+        "The Nimbus archive is encrypted.",
+        "The Nimbus archive is not encrypted.",
+        Authority.DERIVED,
+        Authority.DERIVED,
+    ),
+    (
+        "compound-value-divergence",
+        "What is the Fennel gate state?",
+        "The Fennel gate is required and approved.",
+        "The Fennel gate is not optional and denied.",
+        Authority.DERIVED,
+        Authority.DERIVED,
+    ),
+    (
+        "never-non-value-word",
+        "Does the Willow relay report outages?",
+        "The Willow relay reports outages.",
+        "The Willow relay never reports outages.",
+        Authority.DERIVED,
+        Authority.DERIVED,
+    ),
+    (
+        "same-authority-proper-noun-substitution",
+        "Who owns the Juniper escalation?",
+        "The Juniper escalation is owned by the escalation desk.",
+        "The Juniper escalation is owned by the vendor desk.",
+        Authority.DERIVED,
+        Authority.DERIVED,
+    ),
+    (
+        "same-authority-weekday-substitution",
+        "When does the Rowan report fall?",
+        "The Rowan report falls on Tuesday.",
+        "The Rowan report falls on Thursday.",
+        Authority.DERIVED,
+        Authority.DERIVED,
+    ),
+    (
+        "same-authority-place-substitution",
+        "Where is the Cedar archive stored?",
+        "The Cedar archive is stored in Frankfurt.",
+        "The Cedar archive is stored in Dublin.",
+        Authority.DERIVED,
+        Authority.DERIVED,
     ),
 )
 
@@ -461,10 +583,10 @@ def test_same_authority_value_word_contradiction_stays_as_two_claims(
 
 @pytest.mark.parametrize(
     ("case_name", "question", "left_statement", "right_statement"),
-    CONTRADICTION_CASES,
-    ids=tuple(case[0] for case in CONTRADICTION_CASES),
+    NON_COMPETING_CASES,
+    ids=tuple(case[0] for case in NON_COMPETING_CASES),
 )
-def test_same_subject_divergence_outside_value_word_list_is_a_conflict(
+def test_non_competing_statement_pairs_produce_no_conflicts(
     tmp_path,
     case_name,
     question,
@@ -472,8 +594,49 @@ def test_same_subject_divergence_outside_value_word_list_is_a_conflict(
     right_statement,
 ) -> None:
     sources = (
-        SourceFixture("reviewer-left", f"{case_name}-left.md", left_statement),
-        SourceFixture("reviewer-right", f"{case_name}-right.md", right_statement),
+        SourceFixture("agreeing-left", f"{case_name}-left.md", left_statement),
+        SourceFixture("agreeing-right", f"{case_name}-right.md", right_statement),
+    )
+
+    result = _ask_sources(tmp_path, sources, question)
+
+    assert result.conflicts == ()
+
+
+@pytest.mark.parametrize(
+    (
+        "case_name",
+        "question",
+        "left_statement",
+        "right_statement",
+        "left_authority",
+        "right_authority",
+    ),
+    CONTRADICTING_CASES,
+    ids=tuple(case[0] for case in CONTRADICTING_CASES),
+)
+def test_contradicting_statement_pairs_produce_one_conflict_with_cited_sides(
+    tmp_path,
+    case_name,
+    question,
+    left_statement,
+    right_statement,
+    left_authority,
+    right_authority,
+) -> None:
+    sources = (
+        SourceFixture(
+            "contradicting-left",
+            f"{case_name}-left.md",
+            left_statement,
+            authority=left_authority,
+        ),
+        SourceFixture(
+            "contradicting-right",
+            f"{case_name}-right.md",
+            right_statement,
+            authority=right_authority,
+        ),
     )
 
     result = _ask_sources(tmp_path, sources, question)
@@ -485,8 +648,101 @@ def test_same_subject_divergence_outside_value_word_list_is_a_conflict(
         citation.item_id.source_object_id.split(":", 1)[0]
         for claim in result.claims
         for citation in claim.citations
-    } == {"reviewer-left", "reviewer-right"}
+    } == {"contradicting-left", "contradicting-right"}
     assert set(result.conflicts[0].claims) == set(result.claims)
+
+
+def test_negated_non_value_word_refuses_merge_when_conflict_detection_is_bypassed(
+    tmp_path, monkeypatch
+) -> None:
+    import lee_kb.answer as answer_module
+
+    sources = (
+        SourceFixture(
+            "negation-left",
+            "encrypted.md",
+            "The Nimbus archive is encrypted.",
+        ),
+        SourceFixture(
+            "negation-right",
+            "not-encrypted.md",
+            "The Nimbus archive is not encrypted.",
+        ),
+    )
+    monkeypatch.setattr(answer_module, "detect_conflicts", lambda *_args, **_kwargs: ())
+
+    result = _ask_sources(tmp_path, sources, "Is the Nimbus archive encrypted?")
+
+    assert result.conflicts == ()
+    assert len(result.claims) == 2
+    assert all(len(claim.citations) == 1 for claim in result.claims)
+
+
+def test_conflict_detection_has_no_false_conflicts_or_missed_contradictions(
+    tmp_path,
+) -> None:
+    false_conflicts = 0
+    for authority_pair in (
+        (Authority.DERIVED, Authority.DERIVED),
+        (Authority.CANONICAL, Authority.DERIVED),
+    ):
+        for case in NON_COMPETING_CASES:
+            case_name, question, left_statement, right_statement = case
+            workspace = tmp_path / f"agreeing-{authority_pair[0].value}-{case_name}"
+            workspace.mkdir()
+            sources = (
+                SourceFixture(
+                    "agreeing-left",
+                    f"{case_name}-left.md",
+                    left_statement,
+                    authority=authority_pair[0],
+                ),
+                SourceFixture(
+                    "agreeing-right",
+                    f"{case_name}-right.md",
+                    right_statement,
+                    authority=authority_pair[1],
+                ),
+            )
+            result = _ask_sources(workspace, sources, question)
+            false_conflicts += bool(result.conflicts)
+
+    missed_contradictions = 0
+    merged_contradictions = 0
+    for case in CONTRADICTING_CASES:
+        (
+            case_name,
+            question,
+            left_statement,
+            right_statement,
+            left_authority,
+            right_authority,
+        ) = case
+        workspace = tmp_path / f"contradicting-{case_name}"
+        workspace.mkdir()
+        sources = (
+            SourceFixture(
+                "contradicting-left",
+                f"{case_name}-left.md",
+                left_statement,
+                authority=left_authority,
+            ),
+            SourceFixture(
+                "contradicting-right",
+                f"{case_name}-right.md",
+                right_statement,
+                authority=right_authority,
+            ),
+        )
+        result = _ask_sources(workspace, sources, question)
+        missed_contradictions += not bool(result.conflicts)
+        merged_contradictions += any(
+            len(claim.citations) > 1 for claim in result.claims
+        )
+
+    assert false_conflicts == 0
+    assert missed_contradictions == 0
+    assert merged_contradictions == 0
 
 
 def test_top_ranked_absence_statement_is_additive_to_substantive_answer(

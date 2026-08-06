@@ -32,15 +32,15 @@ source evidence exists outside the permitted path.
 | operational-01 | Operational status | `product-definition.md` | Hit | 1 |
 | operational-02 | Operational status | `product-definition.md` | Hit | 1 |
 | operational-03 | Operational status | `architecture.md` | Hit | 1 |
-| operational-04 | Operational status | `architecture.md` | Hit | Hit | 2 |
-| project-management-01 | Project management | `project-plan.md` | Hit | Hit | 9 |
-| project-management-02 | Project management | `project-plan.md` | Hit | Hit | 2 |
-| project-management-03 | Project management | `backlog/schema.md` | Hit | Hit | 2 |
-| project-management-04 | Project management | `backlog/schema.md` | Hit | Hit | 5 |
-| architecture-01 | Architecture | `architecture.md` | Hit | Hit | 2 |
-| architecture-02 | Architecture | `architecture.md` | Hit | Hit | 2 |
+| operational-04 | Operational status | `architecture.md` | Hit | 2 |
+| project-management-01 | Project management | `project-plan.md` | Hit | 1 |
+| project-management-02 | Project management | `project-plan.md` | Hit | 1 |
+| project-management-03 | Project management | `backlog/schema.md` | Hit | 2 |
+| project-management-04 | Project management | `backlog/schema.md` | Hit | 4 |
+| architecture-01 | Architecture | `architecture.md` | Hit | 1 |
+| architecture-02 | Architecture | `architecture.md` | Hit | 2 |
 | architecture-03 | Architecture | `architecture.md` | Hit | 1 |
-| architecture-04 | Architecture | `architecture.md` | Hit | Hit | 2 |
+| architecture-04 | Architecture | `architecture.md` | Hit | 1 |
 | job-search-01 | Job search | `research/employee-zero-kb-reference.md` | Hit | 1 |
 | job-search-02 | Job search | `research/employee-zero-kb-reference.md` | Hit | 1 |
 | job-search-03 | Job search | `research/employee-zero-kb-reference.md` | Hit | 1 |
@@ -56,13 +56,13 @@ source evidence exists outside the permitted path.
 ## Baseline
 
 - Expected-citation hit rate at 10: **20/20 (100.0%)**.
-- Expected-citation hit rate at 1: **12/20 (60.0%)**.
-- Mean reciprocal rank: **0.766**.
+- Expected-citation hit rate at 1: **16/20 (80.0%)**.
+- Mean reciprocal rank: **0.888**.
 - Negative controls: **3/3 correct**.
-- Unauthorized candidates released: **0**; denied candidates observed: **1**.
+- Unauthorized candidates released: **0**; denied candidates observed: **3**.
 
 Semantic or hybrid retrieval must beat the lexical rank-quality baseline
-(60.0% hit-at-1 and 0.766 MRR) on Lee's curated corpus without reducing
+(80.0% hit-at-1 and 0.888 MRR) on Lee's curated corpus without reducing
 top-10 recall or weakening project and authorization controls. The seed set's
 100% hit-at-10 is saturated and is therefore not, by itself, evidence of a
 semantic improvement. An earlier revision of this corpus used extract-style
@@ -77,10 +77,10 @@ discoverability of the available corpus metadata, not real application
 workflow coverage. Lee's curated replacement must supply genuine recurring
 application questions and authoritative sources.
 
-Sprint 1 `RetrievalReceipt` records one released evidence item. For the
-no-evidence and scoped-empty cases, `retrieve()` consequently returns zero item
-receipts rather than fabricating a citation. The returned `EvidenceBundle`
-still retains the query, principal, project, retrieval timestamp, freshness
-result, and denial count as the empty query's audit envelope. A separately
-persisted query-level receipt would require a future contract change outside
-this harness's write scope.
+`RetrievalReceipt` records one released evidence item. For the no-evidence and
+scoped-empty cases, `retrieve()` consequently returns zero item receipts rather
+than fabricating a citation. The repository also persists a
+`RetrievalAuditEvent` containing the query, principal, retrieval timestamp,
+candidate count, denial count, release count, truncation, and outcome status.
+This covers empty, fully denied, mixed permitted/denied, stale-refused, and
+provider-failure results without exposing restricted source identity.

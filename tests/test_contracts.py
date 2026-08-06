@@ -222,7 +222,7 @@ def test_knowledge_item_constructs_with_provenance_and_permissions() -> None:
     assert item.trust is Trust.CURATED
     assert item.tombstone is False
     assert item.is_retrievable is True
-    assert item.schema_version == 1
+    assert item.schema_version == 2
 
 
 def test_chunk_constructs_and_derives_item_identity() -> None:

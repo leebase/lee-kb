@@ -1,0 +1,328 @@
+{
+  "review": "Sprint 3 — round-three repair of the governed answer() surface (positive contradiction signal, two-sided validation)",
+  "reviewed_at": "2026-08-04",
+  "reviewer_role": "agents/reviewer.md (independent Reviewer, review-only: no implementation file modified)",
+  "scope": "src/lee_kb/answer.py, src/lee_kb/answer_conflict.py, tests/answers/test_answer_benchmarks.py, docs/answer-benchmark-results.md, context.md, result-review.md; re-derived against code-reviews/review-sprint-3-governed-answer.md, review-sprint-3-repair.md and review-sprint-3-repair-2.md",
+  "verdict": "fail",
+  "recommendation": "Ready after specific follow-up",
+  "summary": "The round repaired the direction it measured and regressed the direction it did not. Measured on identical reviewer-constructed corpora through the real connector, real SQLite and the public answer() surface, against both the working tree and a git archive HEAD (a4f75b8) copy of the pre-round-three tree: false conflicts over 8 non-competing pairs fell from 7/8 to 4/8, while missed contradictions over 10 contradicting pairs rose from 0/10 to 5/10, two of which now merge into a single SYNTHESIZED claim asserting a statement and its own negation. That merged shape is S3-R-01 verbatim, reproducible through lee-kb ask. Absence handling, reconciliation, governed exclusivity, citation and receipt closure, absence distinguishability, derived confidence, the dependency boundary and the disclosure surface all survived independent probing, and every number docs/answer-benchmark-results.md publishes re-derives exactly.",
+  "findings": [
+    {
+      "id": "S3-R-17",
+      "severity": "High",
+      "category": "Correctness / confidently wrong output",
+      "file": "src/lee_kb/answer_conflict.py",
+      "location": "src/lee_kb/answer_conflict.py:420-434 (_statements_mergeable superset rule) and :332-338 (_value_words_diverge early return); consumed at src/lee_kb/answer.py:416 (_assemble_initial_claims); user-visible at src/lee_kb/main.py:549-556",
+      "problem": "This round made 'one statement is a strict superset of the other' mean elaboration in both _statements_mergeable and _value_words_diverge. A negation is a strict superset. When the negated word is not in the 27-entry _VALUE_WORDS list, _value_words_diverge returns False because one side contributes no value word at all, _morphological_antonyms_diverge returns False (one difference set is empty), and _statements_mergeable then returns True on left_terms < right_terms -- so claim assembly merges a statement with its own negation into one SYNTHESIZED claim citing both sources, and detect_conflicts emits nothing. Measured on the predicates: ('The Nimbus archive is encrypted.', 'The Nimbus archive is not encrypted.') -> value_words_diverge=False, morphological=False, mergeable=True; same for 'never' ('The Willow relay reports outages.' / '...never reports outages.'). Measured end to end (probe A, reviewer corpora written to disk, discovered through the real LocalFilesConnector into real SQLite, asked only through answer()): 2 of 10 constructed contradicting pairs collapse to 1 claim, 1 merged claim, 0 conflicts, with claim text 'The Nimbus archive is encrypted. The Nimbus archive is not encrypted.' Both halves of the S3-R-01 fix are broken, not just detection: probe B re-runs the same pairs with lee_kb.answer.detect_conflicts neutralised and the merge still happens, so the merge refusal is not independently holding. Reproduced on the shipped surface: lee-kb sync over two same-authority roots then lee-kb ask 'Is the Nimbus archive encrypted?' prints one claim, confidence: synthesized, two citations under a single [1], text asserting the statement and its negation, and no Conflicts: section. The identical probe against a git archive HEAD (a4f75b8) copy of the pre-round-three tree yields 1 conflict and 2 singly-cited claims for both pairs, so this is a regression introduced by this round.",
+      "proposed_fix": "Treat negation as polarity, not vocabulary. Before the superset test in _statements_mergeable, strip a negation token set (not, never, no, none, cannot, n't) from both sides and compare polarity separately: if the de-negated term sets are equal or subset-related and the two sides' polarities differ, that is affirmative disagreement -- refuse the merge and return a conflict signal, regardless of whether the negated word is in _VALUE_WORDS. _value_words_diverge's negation branch (:339-346) already encodes this idea but is unreachable when either side has no value word; lift the polarity check out of it into _conflict_signal so it runs on every pair. Ship one regression fixture per shape asserting all three properties at once -- exactly one Conflict, two singly-cited claims, and (with detect_conflicts neutralised) no merged claim -- since a fixture asserting only the conflict count would have passed while this defect shipped."
+    },
+    {
+      "id": "S3-R-18",
+      "severity": "High",
+      "category": "Correctness / honest reporting (under-warning)",
+      "file": "src/lee_kb/answer_conflict.py",
+      "location": "src/lee_kb/answer_conflict.py:264-313 (_conflict_signal) -- the deleted structural-divergence branch and the authority gate now on :292-301",
+      "problem": "Deleting the undiscriminating branch removed the only term-level signal that could see a substitution between two sources of the same declared authority. Its replacement, _morphological_antonyms_diverge, fires only on a dis-/non-/un- prefix pair, and the surviving structural test at :292 is gated on left.citation.authority is not right.citation.authority. So a same-authority contradiction expressed as an ordinary substitution is reported as two compatible claims with result.conflicts == (). Measured (probe A, reviewer corpora through the real connector and SQLite): 5 of 10 constructed contradicting pairs are missed, against 0 of 10 on the pre-round-three tree with the identical probe; probe B shows 4 of the 8 same-authority pairs yielding zero conflicts. Three are pure substitutions -- '...owned by the escalation desk.' vs '...owned by the vendor desk.'; '...falls on Tuesday.' vs '...on Thursday.'; '...stored in Frankfurt.' vs '...stored in Dublin.' (the other two are S3-R-17). Two of those three shapes are the evidence the previous round used to certify S3-R-10 repaired (code-reviews/review-sprint-3-repair-2.md probe A used a weekday substitution and a proper-noun substitution), so this round silently withdrew a prior High finding's acceptance evidence. The defect also appears inside a multi-source corpus: probe D's three-mutually-distinct shape (Oslo / Lisbon / Athens across two authorities) reports 2 conflicts, not 3, because the Lisbon-Athens pair shares an authority. This contradicts docs/answer-architecture.md:48 ('emit a Conflict for each disagreement'), and under-warning is worse than over-warning here: a reader who sees no Conflicts: section concludes the sources agree. The suite cannot catch it -- all five family-5d contradicting fixtures are value-word, numeric, morphological-antonym or cross-authority shapes; none is a same-authority substitution.",
+      "proposed_fix": "Implement the substitution gate the prior review proposed (its fix item c) instead of deleting the branch: fire when both sides supply distinct fillers for the same slot in an otherwise-matching frame -- len(left_only) == len(right_only) == 1 after synonym canonicalization, with the remaining terms equal -- which catches proper-noun, weekday and place substitutions while leaving elaboration (superset), voice change (canonicalized) and added qualifiers alone. Gate it on that positive structure rather than on declared authority, and drop the authority gate from :292 once it does (see S3-R-19). Add same-authority substitution cases to family 5d, and pin the missed-contradiction rate as a measured number rather than a per-shape fixture count."
+    },
+    {
+      "id": "S3-R-19",
+      "severity": "Medium",
+      "category": "Correctness / honest reporting (over-warning residue)",
+      "file": "src/lee_kb/answer_conflict.py",
+      "location": "src/lee_kb/answer_conflict.py:292-301 (_conflict_signal authority branch), :127 _STRUCTURAL_DIVERGENCE_THRESHOLD; fixtures at tests/answers/test_answer_benchmarks.py:185-222 (NON_COMPETING_CASES)",
+      "problem": "The test S3-R-15 condemned -- meaningful-term Jaccard >= 0.5 and unequal term sets, with no requirement that the difference be a disagreement -- is still executed verbatim; it was not removed, it was moved behind an authority check. Cross-authority agreement is the most common real shape (a canonical policy and a derived summary restating it), so gating on authority difference does not narrow the branch where it matters. Measured (probe A): 3 of 4 constructed cross-authority agreeing pairs are reported as conflicts while their same-authority twins are correctly silent -- 'The escalation desk maintains the Sable incident log.' vs 'The Sable incident log is maintained by the escalation desk.' (voice change only; maintains/maintained absent from _KNOWN_SYNONYM_SETS), an active/passive restatement of the Nimbus rota pair, and an added-attribution pair -- each emitting '...have different declared authority.' The suite pins none of this: all six NON_COMPETING_CASES construct two SourceFixtures with the default Authority.DERIVED, so family 5e proves the same-authority half only, and the benchmark document's claim for that family ('regardless of how much their surface text differs') holds only under that unstated restriction. The round's contradiction coverage also depends on the same hand list: owns/owned works because this round added {own, owned, owning, owns} to _KNOWN_SYNONYM_SETS, which is vocabulary widening of the kind the last two rounds were failed for.",
+      "proposed_fix": "Apply the same positive-signal requirement to the authority branch: emit 'different declared authority' only for pairs that already carry a term-level disagreement signal (substitution per S3-R-18, numeric, value-word, antonym, or polarity per S3-R-17), so declared authority becomes an attribute of a detected conflict rather than a detector in its own right. Add cross-authority variants of all six family-5e cases, and stop relying on _KNOWN_SYNONYM_SETS growth for morphology -- a suffix-stripping normalization (-s, -ed, -ing) applied uniformly covers the class the hand list is chasing."
+    },
+    {
+      "id": "S3-R-20",
+      "severity": "Medium",
+      "category": "Correctness (over-warning)",
+      "file": "src/lee_kb/answer_conflict.py",
+      "location": "src/lee_kb/answer_conflict.py:339-346 (_value_words_diverge negation carve-out)",
+      "problem": "The negation carve-out added this round fires whenever the two sides' value-word sets differ in negation and share any non-negation value word, before the superset/elaboration rule at :349 can suppress it. Emphatic agreement therefore reads as disagreement: 'The Fennel gate is required.' vs 'The Fennel gate is required, not optional.' -> value_words_diverge=True, reported end to end as 'Competing statements about fennel, gate use divergent value words.' (probe A, case emphatic-agreement-same-authority). This is S3-R-12's elaboration shape re-entering through the exception carved beside the rule that closes it -- the document claims S3-R-12 closed, and its named required / required and approved shape genuinely is (mergeable=True, verified), but the same class survives one word away.",
+      "proposed_fix": "Require the negated side's value words, minus the negation tokens, to be equal to the other side's rather than merely overlapping: {mandate, not, optional} - {not} = {mandate, optional} is a strict superset of {mandate} and is elaboration; {mandate, not} - {not} = {mandate} equals {mandate} and is genuine negation. Add 'required' / 'required, not optional' as a seventh family-5e case."
+    },
+    {
+      "id": "S3-R-21",
+      "severity": "Medium",
+      "category": "Documentation accuracy",
+      "file": "docs/answer-benchmark-results.md",
+      "location": "docs/answer-benchmark-results.md:8-35 (revision summary), :66 (family 5e row), :153-193 (Confidence Distribution), :335-413 (Recommendation)",
+      "problem": "The document states the undiscriminating branch is 'removed entirely' and replaced by positive signals. It is not removed: it runs at answer_conflict.py:292-301 behind an authority gate and produces 3 of 4 false conflicts on constructed cross-authority agreeing pairs (S3-R-19). Family 5e's row states its guarantee without recording that all six fixtures are same-authority, so a reader takes a half-measured property for a whole one. More consequentially, the document reports only the direction this round improved. The entire mechanism change is a trade between false conflicts and missed contradictions, and the document contains no missed-contradiction measurement at all -- while 5 of 10 constructed contradictions are now missed and 2 merge into one self-contradictory claim. The closing paragraph then asserts the confidently-wrong-output class '(S3-R-01, S3-R-02, S3-R-03, S3-R-10, S3-R-11, S3-R-12, S3-R-15) are fixed and regression-tested across three repair rounds', when S3-R-01's exact shape is reproducible through lee-kb ask on the delivered tree. Everything the document does measure reproduces exactly -- probe F rebuilds the twelve-document primary corpus and gets 11 claims, all directly_evidenced, 1 conflict total, 0 unresolved citations, matching the Confidence Distribution and its stated family-7 conflict-count correction. The recommendation value, Ready after specific follow-up, matches what I observe; its justification does not.",
+      "proposed_fix": "Name the surviving authority-gated structural branch and say what it tests. Qualify family 5e to same-authority pairs. Report both rates every round -- false conflicts over agreeing pairs and missed contradictions over contradicting pairs -- with the corpora, so a one-directional improvement can never again read as a repair. Withdraw the claim that the confidently-wrong class is closed until S3-R-17 lands."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m pytest tests/",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 1 (agent_orch.validators.command_succeeds@1), reported not re-executed: exit 0, recorded '253 passed in 25.64s', tied to step_01_positive_contradiction_signal criterion 1 (attempt 1).",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "python3 -m pytest tests/",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 2, reported not re-executed: exit 0, recorded '253 passed in 26.61s', tied to step_01_positive_contradiction_signal criterion 1 (attempt 2).",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "python3 -m pytest",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 3, reported not re-executed: exit 0, recorded '253 passed in 26.08s', tied to step_02_verification_and_docs criterion 1.",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "python3 -m black --check src tests tools",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 4, reported not re-executed: exit 0, stderr 'All done! 31 files would be left unchanged.', tied to step_02_verification_and_docs criterion 2.",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "python3 -m ruff check src tests tools",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 5, reported not re-executed: exit 0, stdout 'All checks passed!', with the pre-existing top-level-linter-settings deprecation warning on stderr (S2-R-10, out of scope). Tied to step_02_verification_and_docs criterion 3.",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "python3 -m compileall -q src tests tools",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 6, reported not re-executed: exit 0, no output. Tied to step_02_verification_and_docs criterion 4.",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "python3 tools/check_disclosure.py",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 7, reported not re-executed: exit 0, 'check_disclosure: clean - no host paths or credentials in tracked files.' Tied to step_02_verification_and_docs criterion 5.",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "summary": "Preserved system-validator record 8, reported not re-executed: exit 0, no output. Tied to step_02_verification_and_docs criterion 6.",
+      "source": "preserved_validator_evidence"
+    },
+    {
+      "command": "python3 probeA_two_directions.py",
+      "exit_code": 0,
+      "summary": "Reviewer probe, both directions on reviewer-constructed corpora through the real connector, real SQLite and the public answer() surface. Non-competing pairs: 4 of 8 emit a Conflict (3 cross-authority structural, 1 emphatic-agreement negation). Contradicting pairs: 5 of 10 missed, of which 2 merge into one self-contradictory SYNTHESIZED claim ('The Nimbus archive is encrypted. The Nimbus archive is not encrypted.'). Numeric, value-word, morphological-antonym and cross-authority-substitution contradictions still caught.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "PROBE_SRC=<scratch>/pre-repair/src python3 probeA_two_directions.py",
+      "exit_code": 0,
+      "summary": "Same probe and corpora against a git archive HEAD (a4f75b8) copy of the pre-round-three tree: 7 of 8 non-competing pairs emitted a Conflict, 0 of 10 contradictions missed, 0 merged. Establishes the trade this round made, measured in both directions rather than asserted.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 probeB_merge_refusal.py",
+      "exit_code": 0,
+      "summary": "Merge refusal, both halves, over the eight same-authority contradicting pairs. Normal pipeline: 4 give 1 conflict + 2 singly-cited claims, 3 give 0 conflicts + 2 claims (S3-R-18), 1 gives 0 conflicts + 1 merged claim (S3-R-17). With lee_kb.answer.detect_conflicts neutralised: 7 of 8 still refuse to merge; the negated-non-value-word pair merges, so its merge refusal is not independently holding.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 probeC_absence.py",
+      "exit_code": 0,
+      "summary": "Absence handling is additive and cannot suppress. Control (2 substantive same-topic sources) -> 2 claims, absence is None. Plus an unrelated absence-shaped record -> unchanged, 2 claims, the absence sentence not surfaced. Plus a responsive absence record -> 3 claims, the absence claim singly cited in rank order with both substantive claims intact. probe C failures: none.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 probeD_reconciliation.py",
+      "exit_code": 0,
+      "summary": "Five three-to-four-source shapes across two authorities: max claims citing any one chunk is 1 everywhere, no claim asserts both sides, every conflict side present in result.claims, cited chunks a subset of evidence_used, no raise. probe D failures: none. Also exhibits S3-R-18 inside a multi-source corpus (three-mutually-distinct reports 2 conflicts, not 3).",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 probeE_invariants.py",
+      "exit_code": 0,
+      "summary": "Sprint invariants hold. E1: repository call set during answer() is search (lee_kb.retrieval) then record_receipt x2 (lee_kb.governance), identical to retrieve()'s, with zero calls originating in any lee_kb.answer* module; neutralising answer.retrieve makes answer() raise. E2: 2 claims, 0 uncited, 0 unresolved citations, receipts == used union omitted. E3: another principal's document -> INACCESSIBLE with withheld_count=1, asserted not NOT_FOUND; silence -> NOT_FOUND; project_has_synchronized_content=False -> UNKNOWN; resolution_failed=True -> UNKNOWN; four distinct detail strings. E4: answer() has no confidence parameter, confidence tracks evidence shape, and a claimless Answer with non-UNKNOWN confidence is refused at construction. probe E failures: none.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 probeF_benchmark_corpus.py",
+      "exit_code": 0,
+      "summary": "Rebuilt the twelve-document primary fixture corpus and asked the five family-7 questions: 11 claims, all directly_evidenced, 0 synthesized, 1 conflict total (Meridian only), 0 unresolved citations -- reproducing docs/answer-benchmark-results.md's Confidence Distribution and its stated family-7 conflict-count correction exactly.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 -m lee_kb.main sync --config <scratch>/clitest/sources.toml --workspace-root <scratch>/clitest --database <scratch>/clitest/projection.sqlite",
+      "exit_code": 0,
+      "summary": "Shipped CLI: '2 created' over two same-authority derived roots holding the encrypted / not-encrypted pair, in this step's scratch space.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 -m lee_kb.main ask \"Is the Nimbus archive encrypted?\" --config <scratch>/clitest/sources.toml --principal lee",
+      "exit_code": 0,
+      "summary": "S3-R-17 is user-visible on the shipped surface: one claim, 'confidence: synthesized', both sources cited under a single [1], text asserting the statement and its negation, and no Conflicts: section.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 -m pytest tests/answers/ --collect-only -q",
+      "exit_code": 0,
+      "summary": "27 tests collected in 0.07s, confirming the claimed benchmark item count. Collection only; no test executed and no preserved validator command re-run.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 -c \"import tomllib; ...\" (pyproject dependency read) + AST walk over all 31 tracked *.py files against sys.stdlib_module_names",
+      "exit_code": 0,
+      "summary": "project.dependencies == []; only extra is dev = [pytest>=7.0, black>=23.0, ruff>=0.1.0]; build requires setuptools>=61.0, wheel. The complete non-stdlib, non-local import set across the repository is {pytest} (13 test files). No runtime dependency was added.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "git ls-files -z 'src/*' 'tests/*' 'tools/*' | xargs -0 grep -InE '<21 model-client package names + claude-*/gpt-N model-id shapes>'",
+      "exit_code": 0,
+      "summary": "One hit in product code and it is the English word 'requests' inside src/lee_kb/governance.py:126's error string. Repository-wide, the only other matching files are four prior code-reviews/ artifacts. No LLM client is imported.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "git ls-files -z | xargs -0 grep -InE '(/home/<u>|/Users/<u>|C:\\\\Users\\\\|/root/<a>|/var/folders/|/private/var/|/mnt/<a>|/media/<a>|/opt/<a>|/srv/<a>)'",
+      "exit_code": 0,
+      "summary": "Zero absolute-host-path hits in src/, tests/ or tools/, and zero in the six files this slice changed. Every hit is a prior code-reviews/ artifact quoting the closed S3-R-14 finding. S3-R-14 stays closed.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "git ls-files -z | xargs -0 grep -InE '(api[_-]?key|secret[_-]?key|client[_-]?secret|access/refresh[_-]?token|Bearer .|password=|private[_-]?key|BEGIN . PRIVATE KEY|AKIA...|sk-...|ghp_...|xox[baprs]-|eyJ...|Authorization:)' ; plus tracked-artefact and e-mail scans",
+      "exit_code": 0,
+      "summary": "Four credential-shape hits outside code-reviews/, all the connector's own secret tripwire and its tests (research/employee-zero-kb-reference.md:44, src/lee_kb/connectors/local_files.py:158, tests/test_local_connector.py:711 and :713); no credential value. No .sqlite/.db/.env/.pem/key artefact and no scratch directory is tracked. 30 files reference the private corpus by root name and counts only, never by content. Exactly four distinct e-mail values: three @example.com placeholders and the published owner identity lee@leebase.com.",
+      "source": "reviewer_probe"
+    },
+    {
+      "command": "python3 tools/validate_verdict.py code-reviews/review-sprint-3-repair-3.verdict.json",
+      "exit_code": 0,
+      "summary": "This verdict satisfies the builtin review_verdict/v1 required shape.",
+      "source": "reviewer_probe"
+    }
+  ],
+  "lenses": {
+    "governed_surface_exclusivity": {
+      "finding_ids": [],
+      "justification": "Clean. Probe E1 wrapped the repository in a transparent recording proxy: the complete call set during answer() is search (originating in lee_kb.retrieval) then record_receipt twice (originating in lee_kb.governance), identical to the sequence retrieve() alone produces on the same inputs, with zero calls originating in any lee_kb.answer* module. Neutralising lee_kb.answer.retrieve makes answer() raise rather than fall back, so no alternate evidence path exists. Statically, the only repository import in the answer modules is answer.py:91, inside the if TYPE_CHECKING: block."
+    },
+    "citations_and_receipt_closure": {
+      "finding_ids": [],
+      "justification": "Clean. Probes E2 and F: every claim carries at least one citation, every citation resolves to a real item and a real chunk in the repository, and receipt_ids covers exactly the union of evidence_used and evidence_omitted. Across the five family-7 questions on the rebuilt primary corpus: 11 claims, 0 uncited, 0 unresolved."
+    },
+    "absence_states": {
+      "finding_ids": [],
+      "justification": "Clean. Probe E3 distinguishes all three states with four distinct detail strings: a document owned by another principal yields INACCESSIBLE with withheld_count=1 and is asserted explicitly not to be NOT_FOUND; silence yields NOT_FOUND; project_has_synchronized_content=False and resolution_failed=True each yield UNKNOWN. Probe C confirms the evidenced-absence path stays additive: an unrelated absence-shaped sentence changes nothing, and a responsive one joins the answer as its own singly-cited claim while both substantive claims survive."
+    },
+    "claim_assembly_and_merge_refusal": {
+      "finding_ids": ["S3-R-17"],
+      "justification": "Seven of eight same-authority contradicting pairs stay unmerged even with detect_conflicts neutralised, which is the property the prior review demanded. The eighth -- a statement and its own negation, where the negated word is outside _VALUE_WORDS -- merges into one SYNTHESIZED claim asserting both, with and without conflict detection, and prints that way through lee-kb ask."
+    },
+    "conflict_detection_false_conflicts": {
+      "finding_ids": ["S3-R-19", "S3-R-20"],
+      "justification": "Materially better than pre-repair and fully repaired for same-authority pairs: 4 of 8 constructed non-competing pairs emit a Conflict against 7 of 8 on the pre-round-three tree with the identical probe and corpora. Not closed: the set-inequality test S3-R-15 condemned still runs behind an authority gate (3 of 4 cross-authority agreeing pairs flagged), and the new negation carve-out mislabels emphatic agreement."
+    },
+    "conflict_detection_missed_contradictions": {
+      "finding_ids": ["S3-R-18", "S3-R-17"],
+      "justification": "5 of 10 constructed contradictions missed, against 0 of 10 pre-repair on the same corpora. Three are same-authority substitutions (proper noun, weekday, place), two of which are the exact shapes the previous review used to certify S3-R-10 repaired; two are the merged-negation shape of S3-R-17. Probe D shows the same inside a three-source corpus."
+    },
+    "conflict_reconciliation": {
+      "finding_ids": [],
+      "justification": "Clean. Probe D over five three-to-four-source shapes across two authorities, including one where the agreeing pair crosses authority and merges first: max claims citing any one chunk is 1, no surviving claim asserts both sides, every conflict side is present in result.claims, cited chunks are a subset of evidence_used, and answer() never raises."
+    },
+    "confidence_model": {
+      "finding_ids": [],
+      "justification": "Clean and derived, not asserted. Probe E4: answer()'s signature carries no confidence parameter; term-identical sources derive SYNTHESIZED while differing sources stay DIRECTLY_EVIDENCED; and constructing an Answer with no claims and a non-UNKNOWN confidence is refused at construction time with ValueError."
+    },
+    "dependency_and_llm_boundary": {
+      "finding_ids": [],
+      "justification": "Clean, verified repository-wide over all 101 tracked files and all 31 tracked Python files rather than the delivered slice. pyproject project.dependencies is empty; the only non-stdlib, non-local import anywhere is pytest in 13 test files; a 21-package model-client scan plus claude-*/gpt-N model-id shapes returns exactly one hit in src/, tests/ or tools/, the English word 'requests' in a governance.py error string. No runtime dependency was added and no LLM client is imported."
+    },
+    "disclosure_and_secrets": {
+      "finding_ids": [],
+      "justification": "Clean, scanned over the class rather than one pattern. Zero absolute-host-path hits in src/, tests/ or tools/ and zero in any of the six files this slice changed; the remaining repository-wide hits are prior code-reviews/ artifacts quoting the closed S3-R-14 finding. Credential-shape hits are only the connector's own secret tripwire and its tests, no value. No projection, key, environment or scratch artefact is tracked. The private corpus is referenced by root name and counts only. The only e-mail addresses are three @example.com placeholders and the published owner identity."
+    },
+    "benchmark_reproducibility_and_documentation": {
+      "finding_ids": ["S3-R-21"],
+      "justification": "Every number docs/answer-benchmark-results.md publishes re-derives exactly on a freshly rebuilt copy of the primary fixture corpus (11 claims, all directly_evidenced, 1 conflict, 0 unresolved citations), and the 27-item collection count is confirmed. The mechanism narrative around those numbers does not hold -- the branch described as removed still runs behind an authority gate -- and the direction that regressed is not measured at all, while the closing paragraph asserts the confidently-wrong-output class closed."
+    },
+    "tests_and_documentation": {
+      "finding_ids": ["S3-R-21", "S3-R-18", "S3-R-19"],
+      "justification": "The suite is green at 253 tests and 27 benchmark items per preserved validator evidence, but it contains no same-authority substitution fixture (S3-R-18), no cross-authority agreeing-pair fixture (S3-R-19), no negated-non-value-word fixture (S3-R-17), and no rate assertion in either direction. Three consecutive rounds have each traded one direction for the other under a green suite; per-shape fixtures cannot bound a rate. S3-R-04, S3-R-05 (Medium) and S3-R-07, S3-R-08, S3-R-09 (Low) remain open and were verified still open for this review."
+    }
+  },
+  "readiness_criteria": [
+    {
+      "criterion": "Contradicting same-authority pairs yield a Conflict and two separately cited claims",
+      "state": "verified_false",
+      "basis": "Probe A: 4 of 8 same-authority contradicting pairs yield no conflict; probe B: one of them merges into a single claim asserting both sides."
+    },
+    {
+      "criterion": "Merge refusal holds when conflict detection is bypassed",
+      "state": "verified_false",
+      "basis": "Probe B: 7 of 8 hold; the negated-non-value-word pair merges with lee_kb.answer.detect_conflicts neutralised (S3-R-17)."
+    },
+    {
+      "criterion": "Conflict detection reports only real disagreement",
+      "state": "verified_false",
+      "basis": "Probe A: 4 of 8 constructed non-competing pairs still emit a Conflict (3 cross-authority, 1 emphatic-agreement) against 7 of 8 pre-repair -- improved, not closed (S3-R-19, S3-R-20)."
+    },
+    {
+      "criterion": "An unrelated absence-shaped sentence does not suppress a multi-source answer",
+      "state": "verified_true",
+      "basis": "Probe C control/treatment: substantive claims and citations survive, and a responsive absence joins the answer additively as its own singly-cited claim."
+    },
+    {
+      "criterion": "Three same-topic sources across two authorities: one claim per chunk, no resurrected merge",
+      "state": "verified_true",
+      "basis": "Probe D over five shapes; max citations per chunk 1, no both-sides claim, every conflict side present, no raise."
+    },
+    {
+      "criterion": "answer() composes strictly over governance.retrieve()",
+      "state": "verified_true",
+      "basis": "Probe E1 recording proxy plus the static import scan; repository imported only under TYPE_CHECKING."
+    },
+    {
+      "criterion": "Every substantive claim carries a resolving citation",
+      "state": "verified_true",
+      "basis": "Probes E2 and F: 0 uncited claims, 0 unresolved citations, receipts covering exactly used union omitted."
+    },
+    {
+      "criterion": "The three absence states remain distinguishable; INACCESSIBLE is never NOT_FOUND",
+      "state": "verified_true",
+      "basis": "Probe E3, four distinct absence details across INACCESSIBLE, NOT_FOUND and two UNKNOWN paths."
+    },
+    {
+      "criterion": "Confidence is derived, not asserted",
+      "state": "verified_true",
+      "basis": "Probe E4: no confidence parameter on answer(), confidence tracks evidence shape, claimless confident Answer refused at construction."
+    },
+    {
+      "criterion": "No runtime dependency added; no LLM client imported",
+      "state": "verified_true",
+      "basis": "Repository-wide dependency, AST-import and model-client scans over all 101 tracked files and 31 Python files."
+    },
+    {
+      "criterion": "No absolute host path, private corpus content, or credential-shaped detail in any tracked file",
+      "state": "verified_true",
+      "basis": "Repository-wide class scans plus a delivered-slice scan; zero hits in src/, tests/, tools/ or the six changed files."
+    },
+    {
+      "criterion": "Product verification commands green (per preserved system-validator records)",
+      "state": "verified_true",
+      "basis": "Eight preserved agent_orch.validators.command_succeeds@1 records, all exit status 0 and passed true, summarized from the preserved artifact and not re-executed."
+    },
+    {
+      "criterion": "Benchmark document's recommendation matches observed behaviour",
+      "state": "verified_false",
+      "basis": "S3-R-21: the recommendation value is right; its justification claims a removed branch that still runs, states a same-authority-only guarantee unqualified, reports only the improved direction, and asserts the confidently-wrong class closed while S3-R-01's shape reproduces through lee-kb ask."
+    },
+    {
+      "criterion": "Semantic conformance independently judged",
+      "state": "not_evidenced",
+      "required_evidence": ["semantic_judge_execution"],
+      "basis": "This playbook declares no semantic_check rule, so the evaluator packet marks semantic_judge_execution not applicable and no such record reached this step."
+    }
+  ],
+  "residual_risks": [
+    "Prior Medium findings remain open: S3-R-04 (Answer carries no withheld/truncated signal; dataclasses.fields(Answer) confirmed to list only question, principal, project, claims, confidence, receipt_ids, evidence_used, evidence_omitted, conflicts, absence, answered_at, prose, synthesis_provider_id) and S3-R-05 (cmd_ask at src/lee_kb/main.py:619-625 still passes only principal, project and top_k, leaving the purpose-built UNKNOWN absence branch unreachable from the only shipped surface). S3-R-12 and S3-R-16 are confirmed closed.",
+    "Prior Low findings remain open: S3-R-07 (Provenance Examples quote reformatted, heading-free claim text; every claim my probes produced from a headed document begins with its Markdown heading, and probe F measures three claims for the fuzzy-name question where the document shows one), S3-R-08 (docs/answer-architecture.md:241 still reads 'v1 ships with no provider configured' while answer() defaults to DEFAULT_SYNTHESIS_PROVIDER), S3-R-09 (answer_evidence.py:215 OUTSIDE_REQUESTED_PROJECT omissions still reach the reader as NOT_RELEVANT). The Sprint 1/2 advisories S1-R-14 and S2-R-05 through S2-R-11 are untouched by this slice and remain open.",
+    "The LLM-backed SynthesisProvider is unimplemented, pending dependency approval. answer() ships with only DeterministicSynthesisProvider, a standard-library template renderer with no model call, so lee-kb ask returns structured template prose rather than natural-language synthesis. An LLM-backed provider requires a runtime model-client dependency, not approved under AGENTS.md's 'Add external runtime dependencies' guardrail (Open Question 6). Verified rather than assumed: empty project.dependencies, a single non-stdlib import (pytest) across 31 tracked Python files, and one model-client scan hit that is the English word 'requests' in a governance.py error string.",
+    "Live filesystem verification is deferred. Every result in this review, in docs/answer-benchmark-results.md and in the delivered suite comes from temporary synthetic projections built for the test, including my own probes, which write throwaway roots under a temporary directory (and, for the CLI probe, under this step's scratch space) and sync them through the real connector into real SQLite. Nothing exercises answer() against a live, continuously-synchronized filesystem corpus over time: freshness drift, resync during use, tombstoning mid-question, concurrent sync.",
+    "answer() has still never been run against the real corpus (Open Question 7). Both open directions are corpus-shape sensitive: a real policy corpus holds far more cross-authority restatements (S3-R-19) and far more negated statements (S3-R-17) than twenty-seven fixtures do.",
+    "The see-saw is now the main risk, not any single finding. Round two fixed merging and introduced over-warning; round three fixed over-warning and reintroduced merging. The mechanism is a hand-tuned word-list heuristic tested by per-shape fixtures, and per-shape fixtures cannot bound a rate. Until the suite measures both directions as rates over fixed corpora, a fourth round is as likely to trade back as to converge.",
+    "Two Sprint 1/2 open questions are inherited unchanged: the OR-matcher worst-case retrieval latency (~1.521s, Open Question 5) and permission-basis on receipts (Open Question 2), both of which apply to answer() because it calls retrieve() directly."
+  ]
+}

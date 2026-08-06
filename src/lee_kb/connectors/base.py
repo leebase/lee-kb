@@ -36,6 +36,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 
 from ..contracts import (
     DEFAULT_PROJECT,
@@ -51,6 +52,8 @@ __all__ = [
     "ConnectorError",
     "ConnectorConfigError",
     "ConnectorReadError",
+    "ReadFailureKind",
+    "ReadFailure",
     "SourceObject",
     "ObjectChange",
     "FetchedDocument",
@@ -100,12 +103,47 @@ class ConnectorConfigError(ConnectorError):
     """Raised when a connector's configuration is missing or malformed."""
 
 
+class ReadFailureKind(str, Enum):
+    """Safe classifications for a source object that could not be read."""
+
+    UNSUPPORTED = "unsupported"
+    UNREADABLE = "unreadable"
+    MALFORMED = "malformed"
+    TEMPORARILY_INACCESSIBLE = "temporarily_inaccessible"
+
+
 class ConnectorReadError(ConnectorError):
     """Raised when a known source object cannot be read or decoded.
 
     Ingestion invariants require a clear, specific error here rather than a
     silently skipped or corrupted item.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: ReadFailureKind = ReadFailureKind.UNREADABLE,
+    ) -> None:
+        if not isinstance(kind, ReadFailureKind):
+            raise TypeError("kind must be a ReadFailureKind")
+        self.kind = kind
+        super().__init__(message)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadFailure:
+    """An accounted-for read failure without raw paths or document content."""
+
+    source_object_id: str
+    kind: ReadFailureKind
+    detail: str
+
+    def __post_init__(self) -> None:
+        _require_text(self.source_object_id, "source_object_id")
+        if not isinstance(self.kind, ReadFailureKind):
+            raise TypeError("kind must be a ReadFailureKind")
+        _require_text(self.detail, "detail")
 
 
 @dataclass(frozen=True, slots=True)

@@ -10,8 +10,9 @@ same invariant explicit when claims are combined downstream.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from decimal import Decimal
-from itertools import combinations
+from itertools import combinations, permutations
 
 from .answer_contracts import Claim, Confidence, Conflict, ConflictSide
 from .answer_evidence import EvidenceSelection
@@ -23,8 +24,13 @@ __all__ = [
     "retain_conflict_sides",
 ]
 
-_TOKEN_PATTERN = re.compile(r"[\w-]+", re.UNICODE)
+_TOKEN_PATTERN = re.compile(r"\w+(?:['’]\w+)?(?:-\w+)*", re.UNICODE)
 _NUMBER_PATTERN = re.compile(r"(?<!\w)\d+(?:,\d{3})*(?:\.\d+)?(?!\w)")
+_NUMBER_QUANTITY_PATTERN = re.compile(
+    r"(?<!\w)(?P<number>\d+(?:,\d{3})*(?:\.\d+)?)"
+    r"\s*(?P<unit>%|[^\W\d_]+(?:-[^\W\d_]+)*)",
+    re.UNICODE,
+)
 _SUPERSESSION_PATTERN = re.compile(
     r"\b(?:supersed\w*|replac\w*|no longer|instead of|revis(?:e|ed|ion))\b",
     re.IGNORECASE,
@@ -38,16 +44,29 @@ _STOP_WORDS = frozenset(
         "as",
         "at",
         "be",
+        "been",
+        "being",
         "by",
+        "can",
         "for",
         "from",
+        "could",
+        "did",
+        "do",
+        "does",
         "has",
+        "have",
+        "had",
         "in",
         "is",
         "it",
+        "may",
+        "might",
+        "must",
         "of",
         "on",
         "or",
+        "should",
         "that",
         "the",
         "this",
@@ -55,34 +74,75 @@ _STOP_WORDS = frozenset(
         "was",
         "were",
         "with",
+        "will",
+        "would",
     }
 )
 _VALUE_WORDS = frozenset(
     {
         "active",
+        "allow",
+        "allowed",
         "approved",
         "blocked",
         "closed",
         "created",
+        "deny",
         "denied",
+        "disable",
         "disabled",
+        "enable",
         "enabled",
+        "forbid",
+        "forbidden",
         "inactive",
+        "cannot",
         "never",
         "not",
+        "no",
+        "none",
+        "off",
+        "on",
         "open",
         "optional",
+        "permit",
+        "permitted",
+        "prohibit",
+        "prohibited",
         "required",
     }
 )
 _KNOWN_SYNONYM_SETS = (
     frozenset({"mandate", "mandated", "mandates", "require", "required", "requires"}),
     frozenset({"retain", "retained", "retaining", "retains", "retention"}),
+    frozenset({"own", "owned", "owning", "owns"}),
+    frozenset({"list", "listed", "listing", "lists"}),
+    frozenset({"enable", "enabled", "on"}),
+    frozenset({"disable", "disabled", "off"}),
+    frozenset({"allow", "allowed", "permit", "permitted"}),
+    frozenset({"deny", "denied", "forbid", "forbidden", "prohibit", "prohibited"}),
+    frozenset({"day", "days"}),
+    frozenset({"hour", "hours"}),
+    frozenset({"minute", "minutes"}),
+    frozenset({"week", "weeks"}),
+    frozenset({"month", "months"}),
+    frozenset({"year", "years"}),
 )
 _SYNONYM_CANONICAL = {
     term: min(synonyms) for synonyms in _KNOWN_SYNONYM_SETS for term in synonyms
 }
-_STRUCTURAL_DIVERGENCE_THRESHOLD = 0.5
+_VALUE_OPPOSITIONS = frozenset(
+    {
+        frozenset({"active", "inactive"}),
+        frozenset({"approved", "blocked"}),
+        frozenset({"approved", "denied"}),
+        frozenset({"closed", "open"}),
+        frozenset({"disable", "enable"}),
+        frozenset({"allow", "deny"}),
+        frozenset({"mandate", "optional"}),
+    }
+)
+_NEGATION_WORDS = frozenset({"cannot", "never", "no", "none", "not"})
 
 
 def detect_conflicts(
@@ -96,11 +156,13 @@ def detect_conflicts(
     per selected item.  The latter is useful before the full answer assembler
     exists and preserves the same citations and ordering.
 
-    Two same-topic statements conflict when their text differs and their
-    numbers, meaningful terms, or known value words diverge; their declared
-    authority differs; or the newer statement explicitly says it
-    supersedes/replaces earlier material. These are detection signals only;
-    the returned ``Conflict`` contract has no winner.
+    Two same-topic statements conflict only on positive disagreement evidence:
+    the same quantity has different numbers, their polarity or known value
+    words diverge, a prefixed antonym or one-slot substitution differs, or the
+    newer statement explicitly supersedes earlier material.  Declared
+    authority describes a detected disagreement; it is never a disagreement
+    signal by itself.  These are detection signals only; the returned
+    ``Conflict`` contract has no winner.
     """
     if not isinstance(selection, EvidenceSelection):
         raise TypeError("detect_conflicts requires an EvidenceSelection")
@@ -234,16 +296,31 @@ def _conflict_signal(left: Evidence, right: Evidence) -> str | None:
             f"{', '.join(sorted(shared_topic))} use different numeric values."
         )
 
+    if _negation_diverges(left.text, right.text):
+        return (
+            "Competing statements about "
+            f"{', '.join(sorted(shared_topic))} use divergent polarity."
+        )
+
     if _value_words_diverge(left.text, right.text):
         return (
             "Competing statements about "
             f"{', '.join(sorted(shared_topic))} use divergent value words."
         )
 
-    if left.citation.authority is not right.citation.authority:
+    if _morphological_antonyms_diverge(left.text, right.text):
         return (
             "Competing statements about "
-            f"{', '.join(sorted(shared_topic))} have different declared authority."
+            f"{', '.join(sorted(shared_topic))} use opposing terms."
+        )
+
+    if _substitution_diverges(left.text, right.text):
+        if left.citation.authority is not right.citation.authority:
+            detail = "have different declared authority."
+        else:
+            detail = "use different terms."
+        return (
+            "Competing statements about " f"{', '.join(sorted(shared_topic))} {detail}"
         )
 
     if left.source_timestamp == right.source_timestamp:
@@ -256,15 +333,6 @@ def _conflict_signal(left: Evidence, right: Evidence) -> str | None:
             f"{', '.join(sorted(shared_topic))} explicitly supersedes older material."
         )
 
-    if _meaningful_term_similarity(
-        left.text, right.text
-    ) >= _STRUCTURAL_DIVERGENCE_THRESHOLD and not _statements_mergeable(
-        left.text, right.text
-    ):
-        return (
-            "Competing statements about "
-            f"{', '.join(sorted(shared_topic))} differ in meaningful terms."
-        )
     return None
 
 
@@ -273,39 +341,132 @@ def _normalized_text(text: str) -> tuple[str, ...]:
 
 
 def _subject_terms(text: str) -> frozenset[str]:
-    return frozenset(
-        token
-        for token in _normalized_text(text)
-        if token not in _STOP_WORDS
-        and token not in _VALUE_WORDS
-        and not _SUPERSESSION_PATTERN.fullmatch(token)
+    return _canonical_terms(
+        frozenset(
+            token
+            for token in _normalized_text(text)
+            if token not in _STOP_WORDS
+            and token not in _VALUE_WORDS
+            and not _SUPERSESSION_PATTERN.fullmatch(token)
+        )
     )
 
 
 def _value_words_diverge(left: str, right: str) -> bool:
-    left_values = frozenset(_normalized_text(left)) & _VALUE_WORDS
-    right_values = frozenset(_normalized_text(right)) & _VALUE_WORDS
-    return bool(left_values and right_values and left_values != right_values)
+    return _compare_value_words(left, right) == "conflict"
+
+
+def _negation_diverges(left: str, right: str) -> bool:
+    if _non_value_term_polarities_diverge(left, right):
+        return True
+    return _compare_value_words(left, right) == "conflict"
+
+
+def _negated_value_words_agree(left: str, right: str) -> bool:
+    """Recognize a complete positive/negated value-word agreement."""
+    return _compare_value_words(left, right) == "agree"
+
+
+def _compare_value_words(left: str, right: str) -> str | None:
+    """Compare complete value-word sets, returning agreement or conflict."""
+    left_polarities = _value_word_polarities(left)
+    right_polarities = _value_word_polarities(right)
+    if not left_polarities or not right_polarities:
+        return None
+
+    common_values = left_polarities.keys() & right_polarities.keys()
+    if any(
+        left_polarities[value] != right_polarities[value] for value in common_values
+    ):
+        return "conflict"
+
+    left_only = tuple(sorted(left_polarities.keys() - right_polarities.keys()))
+    right_only = tuple(sorted(right_polarities.keys() - left_polarities.keys()))
+    if len(left_only) != len(right_only):
+        return None
+    if not left_only:
+        return None
+
+    pairings = tuple(
+        pairing
+        for pairing in permutations(right_only)
+        if all(
+            frozenset({left_value, right_value}) in _VALUE_OPPOSITIONS
+            for left_value, right_value in zip(left_only, pairing)
+        )
+    )
+    if not pairings:
+        return None
+    if any(
+        any(
+            left_polarities[left_value] == right_polarities[right_value]
+            for left_value, right_value in zip(left_only, pairing)
+        )
+        for pairing in pairings
+    ):
+        return "conflict"
+    return "agree"
+
+
+def _value_word_polarities(text: str) -> dict[str, bool]:
+    """Return each canonical value word and whether its local token is negated."""
+    tokens = _normalized_text(text)
+    polarities: dict[str, bool] = {}
+    for index, token in enumerate(tokens):
+        if token not in _VALUE_WORDS or token in _NEGATION_WORDS:
+            continue
+        canonical = _SYNONYM_CANONICAL.get(token, token)
+        polarities[canonical] = index > 0 and _is_negation_token(tokens[index - 1])
+    return polarities
+
+
+def _non_value_term_polarities(text: str) -> dict[str, bool]:
+    tokens = _normalized_text(text)
+    polarities: dict[str, bool] = {}
+    for index, token in enumerate(tokens):
+        if token in _STOP_WORDS or token in _VALUE_WORDS or _is_negation_token(token):
+            continue
+        canonical = _SYNONYM_CANONICAL.get(token, token)
+        term = _normalize_inflected_term(canonical)
+        polarities[term] = index > 0 and _is_negation_token(tokens[index - 1])
+    return polarities
+
+
+def _non_value_term_polarities_diverge(left: str, right: str) -> bool:
+    left_polarities = _non_value_term_polarities(left)
+    right_polarities = _non_value_term_polarities(right)
+    return any(
+        left_polarities[term] != right_polarities[term]
+        for term in left_polarities.keys() & right_polarities.keys()
+    )
+
+
+def _is_negation_token(token: str) -> bool:
+    return token in _NEGATION_WORDS or token.endswith("n't")
 
 
 def _numbers_diverge(left: str, right: str) -> bool:
+    left_quantities = _numeric_quantities(left)
+    right_quantities = _numeric_quantities(right)
+    for unit in left_quantities.keys() & right_quantities.keys():
+        if left_quantities[unit] != right_quantities[unit]:
+            return True
+
+    # A single unitless value can still be compared when the surrounding frame
+    # is otherwise the same (for example, "version is 2" / "version is 3").
     left_values = _numeric_values(left)
     right_values = _numeric_values(right)
-    if not left_values or not right_values or left_values == right_values:
+    if len(left_values) != 1 or len(right_values) != 1 or left_values == right_values:
         return False
-
-    left_subject = frozenset(
+    if left_quantities or right_quantities:
+        return False
+    left_frame = frozenset(
         term for term in _subject_terms(left) if not term.isdecimal()
     )
-    right_subject = frozenset(
+    right_frame = frozenset(
         term for term in _subject_terms(right) if not term.isdecimal()
     )
-    if not left_subject or not right_subject:
-        return False
-    subject_similarity = len(left_subject & right_subject) / len(
-        left_subject | right_subject
-    )
-    return subject_similarity >= _STRUCTURAL_DIVERGENCE_THRESHOLD
+    return bool(left_frame and left_frame == right_frame)
 
 
 def _numeric_values(text: str) -> frozenset[Decimal]:
@@ -314,18 +475,70 @@ def _numeric_values(text: str) -> frozenset[Decimal]:
     )
 
 
+def _numeric_quantities(text: str) -> dict[str, frozenset[Decimal]]:
+    quantities: dict[str, set[Decimal]] = {}
+    for match in _NUMBER_QUANTITY_PATTERN.finditer(text):
+        raw_unit = match.group("unit").casefold()
+        unit = _SYNONYM_CANONICAL.get(raw_unit, raw_unit)
+        quantities.setdefault(unit, set()).add(
+            Decimal(match.group("number").replace(",", ""))
+        )
+    return {unit: frozenset(values) for unit, values in quantities.items()}
+
+
+def _morphological_antonyms_diverge(left: str, right: str) -> bool:
+    left_terms = _canonical_meaningful_terms(left)
+    right_terms = _canonical_meaningful_terms(right)
+    left_only = left_terms - right_terms
+    right_only = right_terms - left_terms
+    if len(left_only) != 1 or len(right_only) != 1:
+        return False
+    left_term = next(iter(left_only))
+    right_term = next(iter(right_only))
+    return _is_prefixed_antonym(left_term, right_term) or _is_prefixed_antonym(
+        right_term, left_term
+    )
+
+
+def _is_prefixed_antonym(negative: str, positive: str) -> bool:
+    for prefix in ("dis", "non", "un"):
+        if negative.startswith(prefix) and len(negative) - len(prefix) >= 4:
+            return negative[len(prefix) :] == positive
+    return False
+
+
+def _substitution_diverges(left: str, right: str) -> bool:
+    left_counts = Counter(_canonical_meaningful_term_sequence(left))
+    right_counts = Counter(_canonical_meaningful_term_sequence(right))
+    left_only = left_counts - right_counts
+    right_only = right_counts - left_counts
+    if sum(left_only.values()) != 1 or sum(right_only.values()) != 1:
+        return False
+    return bool(left_counts.keys() & right_counts.keys())
+
+
 def _statements_mergeable(left: str, right: str) -> bool:
-    """Return whether differences are empty after known synonym normalization."""
-    left_terms = _meaningful_terms(left)
-    right_terms = _meaningful_terms(right)
-    if left_terms == right_terms:
-        return True
-    return _canonical_terms(left_terms) == _canonical_terms(right_terms)
+    """Return whether statements are equivalent or one strictly elaborates."""
+    if (
+        _numbers_diverge(left, right)
+        or _negation_diverges(left, right)
+        or _value_words_diverge(left, right)
+        or _morphological_antonyms_diverge(left, right)
+        or _substitution_diverges(left, right)
+    ):
+        return False
+    left_terms = _canonical_meaningful_terms(left)
+    right_terms = _canonical_meaningful_terms(right)
+    return (
+        left_terms == right_terms
+        or left_terms < right_terms
+        or right_terms < left_terms
+    )
 
 
 def _meaningful_term_similarity(left: str, right: str) -> float:
-    left_terms = _meaningful_terms(left)
-    right_terms = _meaningful_terms(right)
+    left_terms = _canonical_meaningful_terms(left)
+    right_terms = _canonical_meaningful_terms(right)
     if not left_terms or not right_terms:
         return 0.0
     return len(left_terms & right_terms) / len(left_terms | right_terms)
@@ -335,6 +548,52 @@ def _meaningful_terms(text: str) -> frozenset[str]:
     return frozenset(
         token for token in _normalized_text(text) if token not in _STOP_WORDS
     )
+
+
+def _canonical_meaningful_terms(text: str) -> frozenset[str]:
+    return frozenset(_canonical_meaningful_term_sequence(text))
+
+
+def _canonical_meaningful_term_sequence(text: str) -> tuple[str, ...]:
+    return tuple(
+        (
+            canonical
+            if canonical in _VALUE_WORDS or canonical in _NEGATION_WORDS
+            else _normalize_inflected_term(canonical)
+        )
+        for canonical in (
+            _SYNONYM_CANONICAL.get(token, token)
+            for token in _normalized_text(text)
+            if token not in _STOP_WORDS
+        )
+    )
+
+
+def _normalize_inflected_term(term: str) -> str:
+    """Collapse common English inflections for structural comparison."""
+    if len(term) <= 4:
+        return term
+    if term.endswith("ied"):
+        return f"{term[:-3]}y"
+    if term.endswith("ies"):
+        return f"{term[:-3]}y"
+    if term.endswith("ing"):
+        stem = term[:-3]
+        if len(stem) > 2 and stem[-1] == stem[-2]:
+            stem = stem[:-1]
+        return stem
+    if term.endswith("ed"):
+        stem = term[:-2]
+        if len(stem) > 2 and stem[-1] == stem[-2]:
+            stem = stem[:-1]
+        return stem
+    if term.endswith(("ches", "shes", "sses", "xes", "zes")):
+        return term[:-2]
+    if term.endswith("es"):
+        return term[:-1]
+    if term.endswith("s"):
+        return term[:-1]
+    return term
 
 
 def _canonical_terms(terms: frozenset[str]) -> frozenset[str]:

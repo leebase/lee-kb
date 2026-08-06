@@ -49,8 +49,11 @@ Stage by stage:
    disagreement, with no winner selected.
 5. **Confidence assignment.** Label each claim, then the answer as a whole.
 6. **Narration (optional).** Hand the assembled claims to a
-   `SynthesisProvider` for prose. If no provider is configured, the `Answer`
-   carries claims and no prose, and it is still a complete, usable answer.
+   `SynthesisProvider` for prose. `answer()` defaults to the deterministic
+   `DeterministicSynthesisProvider`; a caller may explicitly disable narration,
+   in which case the `Answer` carries claims and no prose. A surface may
+   explicitly opt into an `UNKNOWN` result when the retrieval provider fails;
+   that path has no retry or hidden fallback.
 
 The ordering matters more than the stage count. Claims are assembled from
 evidence, so a claim cannot exist before the evidence that grounds it. Prose is
@@ -76,11 +79,21 @@ reader is entitled to know that seven other chunks were seen and why each was
 set aside. `OmissionReason` enumerates `not_relevant`, `redundant`,
 `superseded`, `stale`, `lower_authority`, and `budget`.
 
+The answer also carries two aggregate, disclosure-safe governance signals from
+the bundle: `withheld_count` reports how many provider candidates were denied
+by permission filtering, and `truncated` reports that permitted candidates
+exceeded the requested `top_k`. They contain no restricted titles, locators,
+or source breakdowns and remain visible when the answer has ordinary claims.
+
+The governed retrieval also persists a query-level `RetrievalAuditEvent`, so
+empty, denied, mixed, stale-refused, and provider-failure outcomes remain
+auditable even when no evidence receipt is released.
+
 `ReceiptId` copies the four fields that stay resolvable after re-chunking — the
 same four that make a `RetrievalReceipt` independently verifiable — and
-deliberately omits the principal, project, and query. Those already have
-exactly one durable home in the repository's receipt table; duplicating
-governance state onto every answer would create a second place for it to drift.
+deliberately omits the principal, project, and query. Those remain in the
+durable retrieval receipt and query-audit records; duplicating governance state
+onto every answer would create a second place for it to drift.
 
 Evidence text is not copied onto the `Answer`. A claim quotes or paraphrases;
 the citation is how a reader reaches the original. This keeps `Answer` small,
@@ -147,6 +160,16 @@ exists precisely to make that case visible. Picking a side automatically would
 move a governance judgement out of the reader's hands and into a heuristic that
 cannot see intent, cannot see which document the organization actually
 operates by, and cannot be audited after the fact.
+
+Conflict detection is deliberately positive, not authority-driven. The v1
+deterministic implementation emits a conflict only when it sees polarity,
+numeric or opposed value-word divergence, a recognized morphological antonym,
+an otherwise-matching one-slot substitution, or explicit supersession. Declared
+authority may describe an already-detected disagreement but cannot create one;
+otherwise a canonical restatement of a derived statement would be reported as
+conflict. Claim assembly uses the same signals to refuse a merge, so conflict
+detection cannot be the only thing preventing a self-contradictory synthesized
+claim.
 
 A conflict may only reference claims the answer actually presents; `Answer`
 rejects a conflict about a claim the reader never sees. Conflicts are reported
@@ -238,10 +261,11 @@ remains standard-library-only in line with the project's dependency-approval
 guardrail.
 
 Implementations must preserve claim order, so a citation marker in the prose
-still maps to the claim it came from. v1 ships with no provider configured:
-`answer()` returns claims and citations, and prose is optional. That keeps the
-first release LLM-free and consistent with the locked decision to validate the
-evidence path with the fewest moving parts.
+still maps to the claim it came from. v1 ships with
+`DeterministicSynthesisProvider` as its default provider: `answer()` returns
+claims, citations, and deterministic template prose unless narration is
+explicitly disabled. That keeps the first release LLM-free and consistent with
+the locked decision to validate the evidence path with the fewest moving parts.
 
 ## Deferred Extensions
 

@@ -16,17 +16,17 @@ import argparse
 import json
 import os
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-
-import tomllib
 
 from . import __version__
 from .answer import answer as compute_answer
 from .answer_contracts import AbsenceKind
 from .chunking import chunk_document
 from .connectors.base import (
+    Connector,
     ConnectorConfigError,
     ConnectorReadError,
     ObjectChange,
@@ -37,8 +37,11 @@ from .connectors.local_files import (
     contains_token_shaped_secret,
     load_config,
 )
+from .connectors.outlook import OutlookConnector, OutlookScope
+from .connectors.outlook_graph import GraphOutlookTransport
 from .contracts import (
     DEFAULT_PROJECT,
+    Authority,
     ChangeType,
     KnowledgeItem,
     KnowledgeItemId,
@@ -47,6 +50,15 @@ from .contracts import (
 )
 from .governance import MissingPrincipalError
 from .governance import retrieve as governed_retrieve
+from .microsoft_graph import (
+    CredentialError,
+    GraphClient,
+    GraphCredential,
+    GraphError,
+    MicrosoftAccount,
+    OAuthTokenManager,
+    UrllibHttpTransport,
+)
 from .repository import SQLiteRepository
 
 #: Environment variable used to override the configuration file location.
@@ -79,6 +91,23 @@ owner = "lee@leebase.com"
 # trust = "curated"
 # visibility = "private"
 # project = "default"
+
+# Optional Microsoft Graph delegated Outlook configuration.  Tokens are kept
+# in the OS secret service, never in this file.
+#
+# [microsoft_graph]
+# client_id = "public-native-app-client-id"
+# tenant = "common"
+# scopes = ["Mail.Read", "User.Read"]
+#
+# [microsoft_graph.accounts.personal]
+# user_id = "lee@example.com"
+#
+# [outlook.inbox]
+# account = "personal"
+# folder_id = "inbox-folder-id"
+# folder_name = "Inbox"
+# project = "default"
 """
 
 
@@ -89,7 +118,8 @@ class SyncSummary:
     A document that a user expects to be searchable must never disappear
     without a count: every candidate the sync did not index shows up in
     exactly one of ``skipped``, ``skipped_token_content``, ``git_ignored``,
-    ``git_unresolved``, or ``unhandled_formats``.
+    ``git_unresolved``, ``unhandled_formats``, or the Office scope/exclusion
+    buckets.
     """
 
     created: int = 0
@@ -109,6 +139,15 @@ class SyncSummary:
     #: Lowercase file suffix to count of candidates with no registered
     #: format handler.
     unhandled_formats: dict[str, int] = field(default_factory=dict)
+    #: Office files explicitly outside an affected root's include scope.
+    out_of_scope_formats: dict[str, int] = field(default_factory=dict)
+    #: Office files explicitly protected by a global or root exclusion.
+    excluded_formats: dict[str, int] = field(default_factory=dict)
+    #: Safe parser/read classifications, keyed by their public value.
+    failure_counts: dict[str, int] = field(default_factory=dict)
+    #: Candidates owned by a more specific overlapping root during a scoped
+    #: discovery pass.
+    claimed_by_other_root: dict[str, int] = field(default_factory=dict)
 
 
 def resolve_config_path(explicit: str | None) -> Path:
@@ -174,6 +213,8 @@ def _changes_from_objects(
     previous: dict[str, str],
     *,
     root_filter: str | None,
+    protected_source_object_ids: frozenset[str] = frozenset(),
+    protected_source_prefixes: tuple[str, ...] = (),
 ) -> tuple[ObjectChange, ...]:
     """Diff one discovery result against the stored snapshot cursor."""
     current = {
@@ -203,6 +244,10 @@ def _changes_from_objects(
             )
     for source_object_id, previous_hash in previous.items():
         if root_filter is not None and _root_name(source_object_id) != root_filter:
+            continue
+        if source_object_id in protected_source_object_ids or any(
+            source_object_id.startswith(prefix) for prefix in protected_source_prefixes
+        ):
             continue
         if source_object_id not in current:
             changes.append(
@@ -246,9 +291,25 @@ def _sync_connector(
         report.objects,
         snapshot,
         root_filter=root_filter,
+        protected_source_object_ids=frozenset(
+            failure.source_object_id for failure in report.failures
+        ),
+        protected_source_prefixes=report.blocked_source_prefixes,
     )
 
-    summary = SyncSummary()
+    summary = SyncSummary(
+        out_of_scope_formats=dict(report.out_of_scope_formats),
+        excluded_formats=dict(report.excluded_formats),
+        claimed_by_other_root=dict(report.claimed_by_other_root),
+    )
+    for failure in report.failures:
+        summary.skipped += 1
+        summary.failure_counts[failure.kind.value] = (
+            summary.failure_counts.get(failure.kind.value, 0) + 1
+        )
+        summary.skipped_objects += (
+            f"{failure.source_object_id} [{failure.kind.value}]",
+        )
     for change in changes:
         item_id = KnowledgeItemId(connector.connector_id, change.source_object_id)
         if change.change_type is ChangeType.DELETED:
@@ -267,10 +328,17 @@ def _sync_connector(
             # (S1-R-10): count and report it, keep its cursor entry untouched
             # so the next pass retries, and continue with the rest.
             summary.skipped += 1
-            summary.skipped_objects += (f"{change.source_object_id}: {error}",)
+            summary.failure_counts[error.kind.value] = (
+                summary.failure_counts.get(error.kind.value, 0) + 1
+            )
+            summary.skipped_objects += (
+                f"{change.source_object_id} [{error.kind.value}]",
+            )
             continue
 
-        if contains_token_shaped_secret(document.content):
+        if contains_token_shaped_secret(document.content) or (
+            document.title is not None and contains_token_shaped_secret(document.title)
+        ):
             # Credentials must not enter the projection: skip indexing and
             # leave the cursor untouched so the file is re-checked (and
             # re-reported) every sync until it is redacted or removed.
@@ -317,16 +385,370 @@ def _sync_connector(
     return summary
 
 
+def _sync_external_connector(
+    connector: Connector,
+    repository: SQLiteRepository,
+    *,
+    sync_timestamp: datetime,
+) -> SyncSummary:
+    """Synchronize a native-delta connector through the common repository.
+
+    The connector computes the complete pending pass; this function prepares
+    every fetch before writing anything, checkpoints only after all reads have
+    succeeded, and uses the final item/tombstone transaction for non-empty
+    rounds.  Empty rounds use the repository's atomic cursor-only capability.
+    """
+    previous_cursor = repository.get_connector_cursor(connector.connector_id)
+    changes = connector.list_changes(previous_cursor)
+    objects = connector.discover()
+    summary = SyncSummary()
+    prepared: list[tuple[ObjectChange, KnowledgeItem | None, tuple]] = []
+    blocked = False
+
+    for change in changes:
+        if change.change_type is ChangeType.DELETED:
+            prepared.append((change, None, ()))
+            continue
+        try:
+            document = connector.fetch(change.source_object_id)
+            permissions = connector.permissions(change.source_object_id)
+        except ConnectorReadError as error:
+            summary.skipped += 1
+            summary.failure_counts[error.kind.value] = (
+                summary.failure_counts.get(error.kind.value, 0) + 1
+            )
+            summary.skipped_objects += (
+                f"{change.source_object_id} [{error.kind.value}]",
+            )
+            continue
+        if contains_token_shaped_secret(document.content) or (
+            document.title is not None and contains_token_shaped_secret(document.title)
+        ):
+            summary.skipped_token_content += 1
+            blocked = True
+            continue
+        item_id = KnowledgeItemId(connector.connector_id, document.source_object_id)
+        item = KnowledgeItem(
+            item_id=item_id,
+            project=document.project,
+            source_locator=document.source_locator,
+            document_type=document.document_type,
+            content_hash=document.content_hash,
+            source_timestamp=document.source_timestamp,
+            sync_timestamp=sync_timestamp,
+            permissions=permissions,
+            title=document.title,
+            authority=document.authority,
+            trust=document.trust,
+        )
+        chunks = chunk_document(
+            document.content,
+            item_id=item_id,
+            project=document.project,
+            document_type=document.document_type,
+        )
+        prepared.append((change, item, chunks))
+
+    if summary.skipped or blocked:
+        # Do not ask the connector for a checkpoint: a hardened connector keeps
+        # the failed source in its pending pass and rejects advancement.
+        summary.unchanged = max(
+            0,
+            len(objects)
+            - summary.created
+            - summary.updated
+            - summary.skipped
+            - summary.skipped_token_content,
+        )
+        return summary
+
+    cursor = connector.checkpoint(objects)
+    if not prepared:
+        repository.advance_cursor(
+            connector.connector_id,
+            cursor,
+            updated_at=sync_timestamp,
+            project=getattr(connector, "project", DEFAULT_PROJECT),
+        )
+    else:
+        operations = []
+        for change, item, chunks in prepared:
+            item_id = KnowledgeItemId(connector.connector_id, change.source_object_id)
+            if change.change_type is not ChangeType.DELETED and item is None:
+                raise RuntimeError("prepared external change lost its item")
+            operations.append((item_id, item, chunks))
+        repository.apply_external_round(
+            operations,
+            cursor=cursor,
+            updated_at=sync_timestamp,
+        )
+        for change, _item, _chunks in prepared:
+            if change.change_type is ChangeType.DELETED:
+                summary.deleted += 1
+            elif change.change_type is ChangeType.CREATED:
+                summary.created += 1
+            else:
+                summary.updated += 1
+    summary.unchanged = max(
+        0,
+        len(objects) - summary.created - summary.updated - summary.skipped,
+    )
+    return summary
+
+
+def _graph_credential(
+    raw_config: dict, account_id: str | None = None
+) -> GraphCredential:
+    section = raw_config.get("microsoft_graph")
+    if not isinstance(section, dict):
+        raise ConnectorConfigError(
+            "configuration must declare [microsoft_graph] for Outlook sync"
+        )
+    selected_id = account_id or section.get("account_id") or "default"
+    if not isinstance(selected_id, str) or not selected_id.strip():
+        raise ConnectorConfigError("Microsoft Graph account_id must be non-empty")
+    accounts = section.get("accounts", {})
+    if not isinstance(accounts, dict):
+        raise ConnectorConfigError("microsoft_graph.accounts must be a table")
+    account_section = accounts.get(selected_id, {})
+    if not isinstance(account_section, dict):
+        raise ConnectorConfigError("Microsoft Graph account configuration is invalid")
+    client_id = account_section.get("client_id", section.get("client_id"))
+    user_id = account_section.get(
+        "user_id", section.get("user_id", raw_config.get("owner"))
+    )
+    tenant = account_section.get("tenant", section.get("tenant", "common"))
+    scopes = account_section.get(
+        "scopes", section.get("scopes", ["Mail.Read", "User.Read"])
+    )
+    if not isinstance(client_id, str) or not client_id.strip():
+        raise ConnectorConfigError("microsoft_graph.client_id is required")
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise ConnectorConfigError(
+            "Microsoft Graph account user_id is required to bind the token"
+        )
+    if not isinstance(tenant, str) or not tenant.strip():
+        raise ConnectorConfigError("Microsoft Graph tenant is required")
+    if not isinstance(scopes, list) or not all(
+        isinstance(scope, str) and scope.strip() for scope in scopes
+    ):
+        raise ConnectorConfigError("Microsoft Graph scopes must be a string array")
+    try:
+        return GraphCredential(
+            MicrosoftAccount(
+                account_id=selected_id,
+                user_id=user_id,
+                tenant=tenant,
+            ),
+            client_id=client_id,
+            scopes=tuple(scopes),
+        )
+    except (TypeError, ValueError) as error:
+        raise ConnectorConfigError(
+            "Microsoft Graph account configuration is invalid"
+        ) from error
+
+
+def _graph_runtime(
+    raw_config: dict, account_id: str | None = None
+) -> tuple[GraphCredential, GraphClient]:
+    credential = _graph_credential(raw_config, account_id)
+    scope_names = {scope.casefold() for scope in credential.scopes}
+    if scope_names != {"mail.read", "user.read"}:
+        raise ConnectorConfigError(
+            "the current Microsoft Graph CLI requires exactly Mail.Read and User.Read"
+        )
+    section = raw_config["microsoft_graph"]
+    try:
+        minimum_interval = float(section.get("minimum_request_interval", 0.0))
+    except (TypeError, ValueError) as error:
+        raise ConnectorConfigError(
+            "microsoft_graph.minimum_request_interval must be numeric"
+        ) from error
+    from .microsoft_graph import SpacingRateLimiter
+
+    http = UrllibHttpTransport()
+    tokens = OAuthTokenManager(credential, transport=http)
+    client = GraphClient(
+        credential,
+        token_manager=tokens,
+        http=http,
+        rate_limiter=SpacingRateLimiter(minimum_interval),
+    )
+    return credential, client
+
+
+def _outlook_connector_from_config(
+    raw_config: dict,
+    source_name: str,
+) -> tuple[OutlookConnector, GraphClient]:
+    section = raw_config.get("outlook")
+    if not isinstance(section, dict):
+        raise ConnectorConfigError(
+            "configuration must declare [outlook.<source>] for Outlook sync"
+        )
+    source = section.get(source_name)
+    if not isinstance(source, dict):
+        raise ConnectorConfigError(f"unknown Outlook source {source_name!r}")
+    account_id = source.get("account")
+    if account_id is not None and not isinstance(account_id, str):
+        raise ConnectorConfigError("outlook source account must be a string")
+    credential, client = _graph_runtime(raw_config, account_id)
+    scope_names = {scope.casefold() for scope in credential.scopes}
+    if "mail.read" not in scope_names:
+        raise ConnectorConfigError("Outlook requires the delegated Mail.Read scope")
+    if "user.read" not in scope_names:
+        raise ConnectorConfigError(
+            "Outlook requires User.Read to verify the delegated account identity"
+        )
+    if scope_names.difference({"mail.read", "user.read"}):
+        raise ConnectorConfigError(
+            "Outlook configuration requests a scope outside its read-only boundary"
+        )
+    folder_id = source.get("folder_id")
+    if not isinstance(folder_id, str) or not folder_id.strip():
+        raise ConnectorConfigError("outlook source folder_id is required")
+    folder_name = source.get("folder_name")
+    configured_owner = source.get("mailbox_owner")
+    if configured_owner is not None and (
+        not isinstance(configured_owner, str)
+        or configured_owner.casefold() != credential.account.user_id.casefold()
+    ):
+        raise ConnectorConfigError(
+            "outlook mailbox_owner must match the verified Graph account user_id"
+        )
+    mailbox_owner = credential.account.user_id
+    project = source.get("project", DEFAULT_PROJECT)
+    if source.get("connector_id") is not None:
+        raise ConnectorConfigError(
+            "outlook connector_id is derived from the account and folder scope"
+        )
+    try:
+        scope = OutlookScope(
+            mailbox_owner=mailbox_owner,
+            folder_id=folder_id,
+            folder_name=folder_name,
+            project=project,
+            authority=Authority(source.get("authority", Authority.CANONICAL.value)),
+            trust=Trust(source.get("trust", Trust.HUMAN_AUTHORED.value)),
+            account_id=credential.account.account_id,
+            tenant=credential.account.tenant,
+            credential_binding=credential.binding,
+        )
+        transport = GraphOutlookTransport(client)
+        connector = OutlookConnector(
+            scope,
+            transport,
+        )
+    except (TypeError, ValueError) as error:
+        raise ConnectorConfigError("Outlook source configuration is invalid") from error
+    return connector, client
+
+
+def _print_sync_summary(
+    connector_name: str,
+    scope: str,
+    summary: SyncSummary,
+) -> None:
+    line = (
+        f"Synced {connector_name}{scope}: {summary.created} created, "
+        f"{summary.updated} updated, {summary.deleted} deleted, "
+        f"{summary.unchanged} unchanged"
+    )
+    if summary.skipped:
+        if summary.failure_counts:
+            breakdown = ", ".join(
+                f"{kind}: {count}"
+                for kind, count in sorted(summary.failure_counts.items())
+            )
+            line += f", {summary.skipped} skipped ({breakdown})"
+        else:
+            line += f", {summary.skipped} skipped"
+    if summary.skipped_token_content:
+        line += f", {summary.skipped_token_content} skipped (token-shaped content)"
+    if summary.git_ignored:
+        line += f", {summary.git_ignored} git-ignored"
+    if summary.git_unresolved:
+        line += f", {summary.git_unresolved} git-ignore status unresolved"
+    if summary.unhandled_formats:
+        total_unhandled = sum(summary.unhandled_formats.values())
+        breakdown = ", ".join(
+            f"{suffix}: {count}"
+            for suffix, count in sorted(summary.unhandled_formats.items())
+        )
+        line += f", {total_unhandled} unhandled format(s) ({breakdown})"
+    if summary.out_of_scope_formats:
+        total_out_of_scope = sum(summary.out_of_scope_formats.values())
+        breakdown = ", ".join(
+            f"{suffix}: {count}"
+            for suffix, count in sorted(summary.out_of_scope_formats.items())
+        )
+        line += (
+            f", {total_out_of_scope} Office file(s) outside include scope "
+            f"({breakdown})"
+        )
+    if summary.excluded_formats:
+        total_excluded = sum(summary.excluded_formats.values())
+        breakdown = ", ".join(
+            f"{suffix}: {count}"
+            for suffix, count in sorted(summary.excluded_formats.items())
+        )
+        line += f", {total_excluded} excluded Office file(s) ({breakdown})"
+    if summary.claimed_by_other_root:
+        total_claimed = sum(summary.claimed_by_other_root.values())
+        breakdown = ", ".join(
+            f"{root}: {count}"
+            for root, count in sorted(summary.claimed_by_other_root.items())
+        )
+        line += f", {total_claimed} claimed by other root(s) ({breakdown})"
+    print(line)
+    for note in summary.skipped_objects:
+        print(f"lee-kb: skipped {note}", file=sys.stderr)
+
+
+def _cmd_sync_outlook(
+    args: argparse.Namespace, config_path: Path, raw_config: dict
+) -> int:
+    if args.source is None:
+        print("lee-kb: Outlook sync requires a configured source name", file=sys.stderr)
+        return 2
+    try:
+        connector, _client = _outlook_connector_from_config(raw_config, args.source)
+        status = connector.health()
+        if not status.healthy:
+            print(f"lee-kb: Outlook sync refused: {status.detail}", file=sys.stderr)
+            return 1
+        db_path = _resolve_database_path(config_path, raw_config, args.database)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        with SQLiteRepository(db_path) as repository:
+            summary = _sync_external_connector(
+                connector,
+                repository,
+                sync_timestamp=datetime.now(timezone.utc),
+            )
+    except (ConnectorConfigError, ConnectorReadError, RuntimeError) as error:
+        print(f"lee-kb: Outlook sync failed: {error}", file=sys.stderr)
+        return 1
+    _print_sync_summary("outlook", f" ({args.source})", summary)
+    return 0
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     config_path = resolve_config_path(args.config)
     try:
         raw_config = _load_raw_config(config_path)
-        roots = load_config(config_path, workspace_root=args.workspace_root)
     except ConnectorConfigError as error:
         print(f"lee-kb: {error}", file=sys.stderr)
         return 2
 
     connector_name = args.connector or "local_files"
+    if connector_name == "outlook":
+        return _cmd_sync_outlook(args, config_path, raw_config)
+    try:
+        roots = load_config(config_path, workspace_root=args.workspace_root)
+    except ConnectorConfigError as error:
+        print(f"lee-kb: {error}", file=sys.stderr)
+        return 2
     if connector_name != "local_files":
         print(
             f"lee-kb: unknown connector {connector_name!r}; "
@@ -381,29 +803,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         return 1
 
     scope = f" ({args.source})" if args.source else ""
-    line = (
-        f"Synced {connector_name}{scope}: {summary.created} created, "
-        f"{summary.updated} updated, {summary.deleted} deleted, "
-        f"{summary.unchanged} unchanged"
-    )
-    if summary.skipped:
-        line += f", {summary.skipped} skipped"
-    if summary.skipped_token_content:
-        line += f", {summary.skipped_token_content} skipped (token-shaped content)"
-    if summary.git_ignored:
-        line += f", {summary.git_ignored} git-ignored"
-    if summary.git_unresolved:
-        line += f", {summary.git_unresolved} git-ignore status unresolved"
-    if summary.unhandled_formats:
-        total_unhandled = sum(summary.unhandled_formats.values())
-        breakdown = ", ".join(
-            f"{suffix}: {count}"
-            for suffix, count in sorted(summary.unhandled_formats.items())
-        )
-        line += f", {total_unhandled} unhandled format(s) ({breakdown})"
-    print(line)
-    for note in summary.skipped_objects:
-        print(f"lee-kb: skipped {note}", file=sys.stderr)
+    _print_sync_summary(connector_name, scope, summary)
     return 0
 
 
@@ -537,10 +937,12 @@ def _print_answer(result) -> None:
         print(f"A: [{absence.kind.value}] {absence.detail or 'No answer available.'}")
         if absence.kind is AbsenceKind.NOT_FOUND:
             print(f"    searched projects: {', '.join(absence.searched_projects)}")
-        elif absence.kind is AbsenceKind.INACCESSIBLE:
+        if result.withheld_count:
             print(
-                f"    withheld: {absence.withheld_count} item(s) denied by permissions"
+                f"    withheld: {result.withheld_count} item(s) denied by permissions"
             )
+        if result.truncated:
+            print("    more evidence was available than --top-k allowed")
         print()
         print(f"Confidence: {result.confidence.value}")
         print(_format_receipt_reference(result))
@@ -583,6 +985,12 @@ def _print_answer(result) -> None:
             f"{len(result.evidence_omitted)} additional evidence item(s) "
             "considered, not used."
         )
+    if result.withheld_count:
+        print()
+        print(f"{result.withheld_count} additional result(s) withheld by permissions.")
+    if result.truncated:
+        print()
+        print("More evidence was available than --top-k allowed.")
 
     print()
     print(_format_receipt_reference(result))
@@ -622,6 +1030,10 @@ def cmd_ask(args: argparse.Namespace) -> int:
                 principal=principal,
                 project=args.project,
                 top_k=args.top_k,
+                project_has_synchronized_content=repository.has_synchronized_project(
+                    args.project
+                ),
+                allow_provider_failure=True,
             )
     except MissingPrincipalError as error:
         print(f"lee-kb: {error}", file=sys.stderr)
@@ -629,6 +1041,34 @@ def cmd_ask(args: argparse.Namespace) -> int:
 
     _print_answer(result)
     return 0
+
+
+def cmd_auth(args: argparse.Namespace) -> int:
+    config_path = resolve_config_path(args.config)
+    try:
+        raw_config = _load_raw_config(config_path)
+        credential, client = _graph_runtime(raw_config, args.account)
+        token_manager = client.token_manager
+        if not isinstance(token_manager, OAuthTokenManager):
+            raise ConnectorConfigError("Graph client token manager is invalid")
+        if args.auth_action == "revoke":
+            token_manager.revoke()
+            print(
+                "Revoked local Microsoft Graph token for "
+                f"{credential.account.account_id}."
+            )
+            return 0
+
+        def show_device_code(device) -> None:
+            print(device.message)
+            print(f"Open {device.verification_uri} and enter code {device.user_code}.")
+
+        client.login(on_device_code=show_device_code)
+        print(f"Authenticated Microsoft Graph account {credential.account.account_id}.")
+        return 0
+    except (ConnectorConfigError, CredentialError, GraphError, RuntimeError) as error:
+        print(f"lee-kb: Microsoft authentication failed: {error}", file=sys.stderr)
+        return 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -694,6 +1134,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the synchronized SQLite projection to this path.",
     )
     sync_parser.set_defaults(func=cmd_sync)
+
+    auth_parser = subparsers.add_parser(
+        "auth", help="Authenticate or revoke a local Microsoft Graph account."
+    )
+    auth_subparsers = auth_parser.add_subparsers(dest="auth_action")
+    auth_subparsers.required = True
+    auth_login_parser = auth_subparsers.add_parser(
+        "login", help="Sign in with the Microsoft device authorization flow."
+    )
+    auth_login_parser.add_argument("--account", default=None)
+    auth_login_parser.add_argument("--config", help=config_help)
+    auth_login_parser.set_defaults(func=cmd_auth)
+    auth_revoke_parser = auth_subparsers.add_parser(
+        "revoke", help="Delete the local Microsoft token for an account."
+    )
+    auth_revoke_parser.add_argument("--account", default=None)
+    auth_revoke_parser.add_argument("--config", help=config_help)
+    auth_revoke_parser.set_defaults(func=cmd_auth)
 
     search_parser = subparsers.add_parser(
         "search", help="Search governed evidence for a query (no LLM synthesis)."

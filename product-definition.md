@@ -2,7 +2,14 @@
 
 ## Product Vision
 
-Lee Knowledge Base (lee-kb) is a Governed Knowledge Fabric that provides a unified, searchable, permission-aware view of organizational knowledge without requiring organizations to migrate their data into a single repository.
+Lee Knowledge Base (lee-kb) is a personal-first, governed Second Brain. It
+connects the places where a person's knowledge lives, builds a searchable
+projection without taking ownership of the source systems, and produces
+evidence-backed answers with provenance, freshness, and access boundaries.
+
+The same architecture is intended to support small shared projects later. It
+is not an enterprise administration product and does not require enterprise
+infrastructure for the personal release.
 
 Rather than replacing existing systems, lee-kb connects to them, periodically synchronizes their contents into a normalized knowledge projection, and provides governed retrieval for both humans and AI employees.
 
@@ -14,7 +21,8 @@ lee-kb provides the experience of "knowing everything at once" while preserving 
 
 # Problem Statement
 
-Organizations accumulate knowledge across dozens of disconnected systems.
+People and small teams accumulate knowledge across dozens of disconnected
+systems.
 
 Examples include:
 
@@ -23,6 +31,7 @@ Examples include:
 - SharePoint
 - Outlook
 - Gmail
+- OneNote
 - Teams
 - Telegram
 - GitHub
@@ -121,7 +130,10 @@ Users should always be able to inspect original sources.
 
 ## Auditable retrieval
 
-Every retrieval produces a Retrieval Receipt: what evidence was retrieved, why, and under what permissions.
+Every retrieval produces release receipts for returned evidence and a durable
+query audit event for the request, outcome, denial counts, and freshness refusal
+state. The records contain enough context to explain what happened without
+exposing restricted source identity.
 
 This is a headline capability, not an implementation detail. It is the answer to "how do we let an AI employee near our data?" — and it is always on, even in single-user deployments.
 
@@ -172,10 +184,8 @@ Primary users:
 
 Future users:
 
-- customer AI employees
-- customer executives
-- customer engineers
-- customer support agents
+- small teams sharing selected projects and sources
+- additional principals using the same governed retrieval API
 
 ---
 
@@ -234,6 +244,8 @@ lee-kb is not:
 - an execution engine
 - an authorization engine
 - a workflow engine
+- an enterprise control plane, tenant administration UI, or high-availability
+  deployment in the personal-first roadmap
 
 ---
 
@@ -249,6 +261,7 @@ Examples:
 - GitHub
 - Local Files
 - OneDrive
+- OneNote
 - Agent-Orch
 
 ---
@@ -281,9 +294,14 @@ A named bundle of knowledge sources relevant to a team, client, or initiative.
 
 Lightweight references, not copies — the same source can belong to many projects.
 
-Every knowledge item belongs to exactly one project. The field is required from the first release; personal deployments use a single `default` project.
+Every knowledge item belongs to exactly one project. The field is required from
+the first release; personal deployments use a single `default` project.
+Projects are the forward-compatible boundary for small shared work, but a
+separate tenant schema is intentionally not introduced until a real multi-user
+deployment requires it.
 
-Queries are scoped to a project by default. Projects are also the tenancy boundary for customer deployments.
+Queries are scoped to a project by default. A future shared deployment may use
+projects as a knowledge-domain boundary without changing the retrieval API.
 
 ---
 
@@ -304,6 +322,12 @@ The collection of evidence used to answer a question.
 ## Retrieval Receipt
 
 An auditable record of what evidence was retrieved, why, and under what permissions.
+
+## Query Audit Event
+
+A durable record of a governed retrieval outcome, including empty, denied,
+mixed, stale-refused, and provider-failure requests that release no evidence
+receipt.
 
 ---
 
@@ -333,7 +357,19 @@ Supported formats: Markdown, plain text, Word (.docx), Excel (.xlsx), PowerPoint
 
 Acceptance criterion: the Chief of Staff can stop using the old `kb` commands and use lee-kb instead without losing capability.
 
-One additional connector: email (decided). It is the highest-value personal corpus, it exercises conversational knowledge, threading, metadata extraction, and future distillation — and every customer has email. Not every customer has GitHub. GitHub remains an important connector but no longer defines the early product.
+The first connector expansion is personal source coverage, not enterprise
+infrastructure. The near-term roadmap is local project directories (including
+`/projects`), selected OneDrive folders, Outlook/Microsoft 365 mail, OneNote,
+and Gmail. These are roadmap targets, not all current capabilities. Email is
+the first external connector family because it exercises conversational
+knowledge, threading, metadata extraction, and future distillation.
+
+The Microsoft Graph foundation is now implemented for the Outlook target:
+delegated device-code authentication, secure local token lifecycle, shared
+request/retry/throttling/pagination/delta plumbing, and one-folder Outlook
+mapping all feed the common governed projection. OneDrive remains a future
+connector using that foundation. OneNote is deliberately design-only and is not
+implemented in the current sprint.
 
 Lexical retrieval, with the Evidence Bundle carrying per-retriever ranks so fusion and semantic search can be added without schema changes.
 
@@ -345,19 +381,25 @@ Freshness reporting.
 
 Retrieval receipts.
 
-No enterprise infrastructure required.
+No enterprise infrastructure required. The personal release remains local,
+SQLite-backed, and single-principal; small-group support is a later,
+permission-driven extension.
 
 ---
 
-# Long-Term Vision
+# Future Direction
 
-Become the shared knowledge substrate for:
+Become a trusted shared knowledge substrate for small teams and their AI
+employees, while keeping source systems authoritative:
 
 - Chief of Staff
 - Agentflow
 - Agent-Orch
 - Employee Zero
-- AI Employee Factory
-- customer AI employees
+- small shared projects
+
+Enterprise deployment, tenant administration, and high-availability service
+operations remain out of the active roadmap unless a concrete user need makes
+them necessary.
 
 Every consumer should depend on the same governed knowledge platform rather than implementing its own retrieval system.

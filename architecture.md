@@ -4,7 +4,11 @@
 
 # Philosophy
 
-lee-kb is a Governed Knowledge Fabric.
+lee-kb is a personal-first, governed Second Brain and Knowledge Fabric.
+
+It begins as Lee's local knowledge system and is designed to extend to small
+shared projects without making enterprise administration a first-release
+requirement.
 
 It is not a database.
 
@@ -12,9 +16,12 @@ It is not a search engine.
 
 It is not a vector store.
 
-It is a platform that connects organizational knowledge sources and exposes governed retrieval services.
+It is a platform that connects personal and organizational knowledge sources
+and exposes governed retrieval services.
 
-lee-kb is a platform, not a subsystem of any consumer. Agent-Orch, Agentflow, Chief of Staff, Employee Zero, and customer AI employees are all consumers of the same public knowledge platform.
+lee-kb is a platform, not a subsystem of any consumer. Lee, the Chief of
+Staff, Agent-Orch, Agentflow, Employee Zero, and future small-team consumers
+use the same public knowledge platform.
 
 The dependency direction is always: consumers depend on lee-kb, lee-kb depends on connectors. Never the reverse. This keeps lee-kb reusable, consumer-agnostic, and independently evolvable.
 
@@ -53,6 +60,8 @@ Lexical Search      Semantic Search
 ──────────────────────────────────────────
  Outlook
  OneDrive
+ Gmail
+ OneNote
  Local Files
  GitHub
  Teams
@@ -79,7 +88,9 @@ Responsible for:
 - health
 - cursor management
 
-Connectors never implement retrieval policy.
+Connectors never implement retrieval policy. Authentication credentials and
+retrieval authorization remain separate concerns, even when a connector uses
+the source provider's access token to discover visibility metadata.
 
 ---
 
@@ -98,6 +109,38 @@ Responsible for:
 
 Atomic updates ensure connector cursors advance only after successful ingestion.
 
+### Office document ingestion
+
+The local-files format registry maps `.docx`, `.xlsx`, and `.pptx` to the
+approved deterministic parsers in `src/lee_kb/connectors/office.py`. Parsers
+return normalized text plus safe metadata; `main._sync_connector()` then uses
+the same `KnowledgeItem`, `Chunk`, SQLite, permission, freshness, citation, and
+receipt path as Markdown. Office sections use a versioned structured chunker,
+with `Chunk.heading` carrying paragraph, sheet/row, cell, slide, table, or
+speaker-note references. There is no parallel Office repository or retrieval
+surface.
+
+The parsers read text only and fail closed on encrypted packages, malformed
+archives, macros, embedded binaries/media, external links, and parser errors.
+Formulas are represented as source formulas with cached displayed values when
+present; they are never evaluated. Discovery reports Office candidates that
+are outside include scope or protected by exclusions, while temporary read
+failures are kept out of deletion diffing. The approved dependency versions
+and the deployed narrow include changes are recorded in
+`docs/office-ingestion.md`.
+
+Office body text that begins with Markdown heading syntax is escaped before the
+shared heading-aware chunker runs. This preserves searchability while keeping
+only parser-generated locators in citation metadata. DOCX table extraction is
+recursive, including nested cell tables.
+
+For a root-scoped local sync, overlapping files retain the global ownership
+rule: the deepest matching resolved root claims the source. The scoped report
+and CLI expose candidates claimed by another root instead of duplicating or
+silently dropping them. Public `list_changes()` uses the same failure-aware
+discovery report as ingestion, so failed roots and subtrees cannot become
+tombstones.
+
 Conversational sources are mutable, not append-only: a new reply changes the meaning of the whole thread, so the entire thread is re-ingested. Content hashing is per-artifact so unchanged artifacts are never re-distilled or re-embedded.
 
 ---
@@ -114,6 +157,7 @@ Stores:
 - synchronization state
 - synchronization journal (append-only)
 - retrieval receipts
+- query-level retrieval audit events, including empty and denied outcomes
 
 The repository stores a projection.
 
@@ -150,6 +194,15 @@ Coordinates:
 Produces an Evidence Bundle.
 
 The engine does not detect contradictions. Conflicting evidence is included in the bundle; synthesis surfaces conflicts naturally ("source A says X, source B says Y").
+
+The governed `answer()` surface detects conflicts only from positive evidence of
+disagreement: polarity, numeric or opposed value-word divergence, recognized
+morphological antonyms, one-slot substitutions in otherwise matching
+statements, or explicit supersession. Declared authority describes a detected
+conflict but never creates one, so a canonical restatement of a derived source
+does not become a false conflict. Claim assembly uses the same signals to
+refuse a merge, preventing a self-contradictory synthesized claim when conflict
+detection is bypassed.
 
 ### Ranking Signals
 
@@ -233,6 +286,11 @@ Every consumer surface exercises the exact same public retrieval API.
 
 Every connector implements a common contract.
 
+A connector instance represents one configured source and scope: for example,
+one local root, one selected OneDrive folder, one Outlook mailbox scope, or one
+Gmail label set. Its stable identity is distinct from the source objects it
+discovers.
+
 Suggested responsibilities:
 
 - discover()
@@ -246,6 +304,11 @@ Suggested responsibilities:
 
 Higher-level connectors may aggregate lower-level connectors.
 
+The common contract stays small. Source-specific authentication, message
+threading, notebook structure, and content normalization live behind the
+connector boundary or in the ingestion layer; retrieval consumers do not learn
+provider-specific APIs.
+
 Example:
 
 Application Development Connector
@@ -257,6 +320,128 @@ Application Development Connector
 - Documentation
 
 Consumers remain unaware of internal composition.
+
+## Outlook Connector Boundary (BI-003)
+
+The first external connector slice is an offline-ready Outlook/Microsoft 365
+adapter behind an injected `OutlookTransport`. One connector instance owns one
+delegated `/me` mailbox folder. The adapter does not own OAuth, token storage,
+HTTP, or CLI configuration; a future live transport must be approved without
+changing the normalized connector contract.
+
+The adapter requests immutable message identity, uses `message:<id>` as the
+source object ID, and maps one folder's opaque Graph delta link into a versioned
+metadata-only cursor. It emits a cursor only after all delta pages complete;
+fetch or page failures therefore cannot become deletions or advance state. A
+failed fetch also blocks the in-memory checkpoint until that object succeeds,
+and checkpoint input must match the completed source metadata exactly.
+`lastModifiedDateTime` is the source timestamp and participates in the
+normalized content hash because the common connector diff contract has no
+separate metadata-only change type. Message text is normalized deterministically
+with common quoted history removed. Delta events are applied in response order;
+a normal move out of the folder must be a removal marker, while an unexpected
+message from another folder fails closed. Conversation and attachment
+identities are relationships, with attachment IDs scoped by their parent
+immutable message, while attachment bytes remain outside the first slice to
+avoid duplicate or unsupported content. Provider-controlled diagnostic strings
+are not echoed by the adapter's health or read errors.
+
+The bounded permission mapping is private owner access for the configured
+mailbox principal, classified as delegated mail read. Successful provider
+access is not treated as a complete per-message ACL. App-only access, shared
+mailboxes, multi-folder aggregation, live authentication, and attachment
+parsing remain separate approval decisions. See `docs/outlook-connector.md` for
+the provider evidence and exact transport contract.
+
+## Live Outlook Proof (Sprint 5 Gate)
+
+The remaining connector increment is a personal proof against one approved real
+mailbox and one disposable folder, not an enterprise integration. The Graph
+transport, delegated authentication, secure token storage, and standard-library
+HTTP boundary are implemented offline; account consent and any external
+connection still require explicit approval.
+
+The current repository contract advances a connector cursor when an item or
+tombstone transaction is written. A live delta round can legitimately contain
+no writes, so Sprint 5 uses the smallest additive repository capability for an
+atomic cursor-only advance: `Repository.advance_cursor()` defaults closed for
+providers that do not support it, and `SQLiteRepository` commits the cursor in
+its own transaction. It preserves the previous cursor on failure and does not
+weaken the existing `sync_item()`/`tombstone_item()` atomicity. This is not
+approval for a breaking schema or a live connection.
+
+The live acceptance path is deliberately narrow: authenticate, initial-sync,
+incremental-sync, restart after a no-change round, recover from an expired
+delta token through a safe full reconciliation, and answer a known email
+question through the existing governed retrieval and deterministic answer path.
+Shared mailboxes, app-only access, multi-folder aggregation, attachment bytes,
+background polling, and enterprise administration remain out of scope.
+
+---
+
+## Microsoft Graph Foundation (Sprint 5)
+
+The reusable Microsoft boundary is implemented in `src/lee_kb/microsoft_graph/`
+and is intentionally provider-resource-neutral:
+
+```text
+GraphCredential / MicrosoftAccount
+          |
+OAuthTokenManager -> TokenStore -> OS secret service or explicit AES-GCM file
+          |
+GraphClient -> HttpTransport -> HTTPS Graph API
+          |
+GraphPage / GraphDeltaResult
+          |
+resource transport (Outlook today; OneDrive later)
+```
+
+`GraphClient` owns access-token acquisition through the token manager, verified
+`/me` subject/tenant binding, one-time idempotent-read 401 refresh,
+authenticated request execution, URL validation, normalized error
+classification, bounded retry/backoff, `Retry-After` throttling, shared request
+pacing for Graph and identity calls, collection pagination, opaque delta-link
+continuation, repeated-link detection, and expired-delta restart. A connector
+never adds a second Graph HTTP or retry implementation.
+
+`MicrosoftAccount` is a local account namespace plus provider user identity and
+tenant selector. `GraphCredential` contains the public client ID and requested
+delegated scopes; client secrets are not persisted in the model. Token sets are
+bound to a non-secret fingerprint of account, user, tenant, client, and scopes.
+Changing that configuration fails closed rather than reusing a cached token.
+The current personal deployment uses one account and delegated `Mail.Read` plus
+minimal `User.Read` for account verification, while the model permits multiple
+account records and tenant selectors later without adding a tenant
+administration schema now. New Outlook cursors bind the project, local account,
+configured tenant, credential fingerprint, and verified provider subject/tenant;
+legacy version-1 cursors are rejected.
+
+The default token store requires an OS-protected secret service. An explicit
+AES-GCM file store is permitted only when its 32-byte key is supplied by an
+external OS-protected mechanism. No plaintext fallback exists. Access tokens,
+refresh tokens, device codes, provider error bodies, and delta links are never
+placed in knowledge evidence, receipts, audit events, logs, or source content.
+Local revocation deletes the app's stored grant; provider-side consent removal
+remains an account-owner operation outside the personal connector.
+
+`GraphOutlookTransport` maps only Graph message resources into the existing
+`OutlookTransport`. The Outlook connector continues to own message identity,
+normalization, permissions, and provenance. The common sync path owns the
+atomic repository boundary: all prepared item/tombstone writes and the final
+cursor commit together for a non-empty round, while an empty round requires
+`Repository.advance_cursor()`.
+That cursor-only operation also marks the connector's project synchronized so
+an empty mailbox is distinguishable from a mailbox that has never been synced.
+An expired delta triggers a complete Graph enumeration marked as a reset; the
+connector derives missing prior IDs as tombstones and advances only after the
+complete read and persistence succeed.
+
+OneDrive is not implemented. Its future mapping is `(drive_id, item_id)` with
+parent relationships, move/rename semantics, explicit permission facts, and
+the same generic delta recovery. OneNote is not implemented or used to shape
+this layer; notebook/section/page identity, HTML/resource normalization,
+permissions, and incremental semantics remain a separate design review. See
+`docs/microsoft-graph.md` for the full readiness assessments.
 
 ---
 
@@ -272,7 +457,27 @@ Queries are scoped to a project by default. "Search everything everywhere" stops
 
 Every knowledge item belongs to exactly one project. The project field is required from the first release — a personal deployment uses a single `default` project. Forcing every item through a project boundary from day one makes multi-tenancy, scoping, and selective synchronization clean later, at almost no cost now.
 
-For customer deployments, a project is also the natural tenancy boundary: client Acme's project bundles Acme's sources, and scoping doubles as isolation.
+## Forward-Compatible Domain Boundaries
+
+The personal deployment uses one implicit knowledge domain and one default
+principal. The contracts nevertheless keep the boundaries explicit:
+
+- `Principal` identifies who requests retrieval.
+- A connector instance identifies the configured source account and scope.
+- A source owner and `PermissionSet` describe source-level access policy.
+- `(connector_id, source_object_id)` identifies the source artifact.
+- A project scopes related sources without copying them.
+- Query-level audit events retain request identity and outcome counts.
+
+There is intentionally no tenant column, tenant administration service, or RBAC
+control plane in the personal release. If small-group sharing becomes real,
+projects and principals provide the first expansion boundary; a separate tenant
+model should be introduced only with a concrete deployment requirement.
+
+For a future shared deployment, a project can be the natural knowledge-domain
+boundary: one project's sources are scoped together without changing the
+retrieval API. Strong tenant isolation remains a later decision, not a personal
+release requirement.
 
 ---
 
@@ -391,12 +596,23 @@ The persistence abstraction provides:
 - metadata
 - lifecycle
 - receipts
+- query-level retrieval audit events
 
 Database-specific optimizations remain behind provider interfaces.
 
-The schema carries a stored version number and a migration framework from version 1.
+The schema carries a stored version number and a migration framework. Version 2
+adds the query-level retrieval audit event table and migrates version 1
+projections additively.
 
-The documented v1 upgrade path is wipe-and-resync: the projection is intentionally disposable because authoritative systems remain the source of truth. Real migrations become mandatory once customer deployments begin.
+The projection remains disposable and wipe-and-resync is still the fallback
+v1 upgrade path because authoritative systems remain the source of truth. The
+v2 audit-table change demonstrates the additive migration path; broader schema
+migrations become mandatory once customer deployments begin.
+
+Governed retrieval requires repository providers to persist the query-level
+audit event for every outcome. The default repository capability fails closed
+when a provider does not implement it; governed retrieval never silently
+returns an unaudited bundle.
 
 ---
 
@@ -488,6 +704,11 @@ Answer with citations
 
 Retrieval Receipt
 
+Every governed retrieval also appends a query-level retrieval audit event. The
+event records request identity, candidate/denial/release counts, truncation,
+and outcome status even when the evidence bundle is empty or freshness refuses
+release; it never duplicates source locators.
+
 ---
 
 # Freshness
@@ -501,6 +722,10 @@ Every answer should know:
 Retrieval reports staleness honestly ("last synced 3 hours ago") rather than blocking on external systems.
 
 Synchronous connector refresh is opt-in per query, never default. A refresh turns a fast local retrieval into a dependency on an external API's latency and rate limits — callers must ask for that explicitly.
+
+When a caller explicitly rejects stale evidence, freshness is evaluated before
+release receipts are persisted. A refusal therefore cannot leave receipts that
+claim evidence was released.
 
 ---
 
@@ -522,7 +747,7 @@ The two systems complement one another without being tightly coupled.
 
 # Deployment Profiles
 
-## Personal
+## Personal (current)
 
 SQLite
 
@@ -536,19 +761,21 @@ Local search
 
 ---
 
-## Team
+## Small Group (future, not enterprise)
 
-PostgreSQL
+SQLite or PostgreSQL if needed
 
 Multiple users
 
-Shared connectors
+Shared projects and connectors
 
-Central retrieval service
+Additional principals and source policies
+
+Central retrieval service only if local deployment no longer suffices
 
 ---
 
-## Enterprise
+## Enterprise (not on the active roadmap)
 
 Snowflake or PostgreSQL
 
@@ -558,7 +785,7 @@ Multiple retrieval services
 
 Tenant isolation
 
-High availability
+High availability only if a concrete product need justifies it
 
 ---
 
@@ -573,4 +800,8 @@ High availability
 - Prefer simple, replaceable provider interfaces.
 - Make every major subsystem independently testable.
 - Keep the platform consumer-agnostic.
-- Build for evolution from SQLite to PostgreSQL and Snowflake without changing the public architecture.
+- Keep a path from SQLite to another persistence provider without changing the
+  public retrieval architecture; do not build enterprise infrastructure ahead
+  of evidence.
+- Design for one principal now and keep principal, source, and project
+  boundaries explicit for later small-group use.

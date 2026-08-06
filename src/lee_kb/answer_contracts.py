@@ -442,7 +442,9 @@ class Answer:
 
     Either the answer has claims and no :attr:`absence`, or it has no claims,
     an absence, and :attr:`Confidence.UNKNOWN` overall. There is no third
-    shape: an answer that says nothing must say why.
+    shape: an answer that says nothing must say why. ``withheld_count`` and
+    ``truncated`` carry the governed bundle's aggregate disclosure-safe limits
+    even when ordinary claims were available.
     """
 
     question: str
@@ -458,6 +460,8 @@ class Answer:
     answered_at: datetime | None = None
     prose: str | None = None
     synthesis_provider_id: str | None = None
+    withheld_count: int = 0
+    truncated: bool = False
 
     def __post_init__(self) -> None:
         _require_text(self.question, "question")
@@ -492,6 +496,14 @@ class Answer:
             _require_aware(self.answered_at, "answered_at")
         _require_optional_text(self.prose, "prose")
         _require_optional_text(self.synthesis_provider_id, "synthesis_provider_id")
+        if not isinstance(self.withheld_count, int) or isinstance(
+            self.withheld_count, bool
+        ):
+            raise TypeError("withheld_count must be an int")
+        if self.withheld_count < 0:
+            raise ValueError("withheld_count must be zero or greater")
+        if not isinstance(self.truncated, bool):
+            raise TypeError("truncated must be a bool")
 
         self._check_absence()
         self._check_confidence()

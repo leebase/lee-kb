@@ -7,14 +7,25 @@ compiles here also proves the contract methods compose correctly.
 """
 
 import subprocess
+import zipfile
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 
 import pytest
+from docx import Document as DocxDocument
+from openpyxl import Workbook
+from pptx import Presentation
 
+from lee_kb.chunking import chunk_document
 from lee_kb.connectors import local_files as local_files_module
-from lee_kb.connectors.base import ConnectorConfigError, ConnectorReadError
+from lee_kb.connectors.base import (
+    ConnectorConfigError,
+    ConnectorReadError,
+    ReadFailureKind,
+)
 from lee_kb.connectors.local_files import (
     LocalFilesConnector,
+    RootConfig,
     contains_token_shaped_secret,
     load_config,
 )
@@ -24,6 +35,7 @@ from lee_kb.contracts import (
     ChangeType,
     Chunk,
     ChunkId,
+    DocumentType,
     KnowledgeItem,
     KnowledgeItemId,
     Trust,
@@ -46,8 +58,7 @@ def write_config(
 ) -> None:
     include_toml = ", ".join(f'"{pattern}"' for pattern in include)
     exclude_toml = ", ".join(f'"{pattern}"' for pattern in exclude)
-    config_path.write_text(
-        f"""
+    config_path.write_text(f"""
 schema = 1
 
 [roots.notes]
@@ -57,8 +68,7 @@ include = [{include_toml}]
 exclude = [{exclude_toml}]
 authority = "{authority}"
 trust = "{trust}"
-"""
-    )
+""")
 
 
 def make_connector(tmp_path, files, **config_kwargs) -> LocalFilesConnector:
@@ -70,6 +80,24 @@ def make_connector(tmp_path, files, **config_kwargs) -> LocalFilesConnector:
         path.write_text(content)
     config_path = tmp_path / "sources.toml"
     write_config(config_path, source_root, **config_kwargs)
+    return LocalFilesConnector.from_config(config_path)
+
+
+def make_binary_connector(
+    tmp_path, filename: str, content: bytes, *, include=None, exclude=()
+) -> LocalFilesConnector:
+    source_root = tmp_path / "office-source"
+    source_root.mkdir()
+    path = source_root / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    config_path = tmp_path / "office-sources.toml"
+    write_config(
+        config_path,
+        source_root,
+        include=include or (f"*{path.suffix}",),
+        exclude=exclude,
+    )
     return LocalFilesConnector.from_config(config_path)
 
 
@@ -322,8 +350,7 @@ def test_root_overrides_apply_first_matching_authority_and_trust(tmp_path) -> No
     (source_root / "knowledge" / "faq.md").write_text("canonical FAQ")
     (source_root / "knowledge" / "notes.md").write_text("derived notes")
     config_path = tmp_path / "sources.toml"
-    config_path.write_text(
-        f"""
+    config_path.write_text(f"""
 schema = 1
 
 [roots.notes]
@@ -342,8 +369,7 @@ trust = "human_authored"
 pattern = "knowledge/*.md"
 authority = "derived"
 trust = "model_produced"
-"""
-    )
+""")
     connector = LocalFilesConnector.from_config(config_path)
 
     discovered = {obj.source_object_id: obj for obj in connector.discover()}
@@ -372,8 +398,7 @@ def test_config_workspace_root_resolves_relative_source_paths(tmp_path) -> None:
     (workspace_root / "docs").mkdir(parents=True)
     (workspace_root / "docs" / "source.md").write_text("workspace source")
     config_path = config_dir / "sources.toml"
-    config_path.write_text(
-        """
+    config_path.write_text("""
 schema = 1
 workspace_root = "../workspace"
 
@@ -381,8 +406,7 @@ workspace_root = "../workspace"
 path = "docs"
 owner = "lee@leebase.com"
 include = ["*.md"]
-"""
-    )
+""")
 
     roots = load_config(config_path)
     connector = LocalFilesConnector(roots)
@@ -396,16 +420,14 @@ def test_relative_source_path_defaults_to_config_directory(tmp_path) -> None:
     (config_dir / "docs").mkdir(parents=True)
     (config_dir / "docs" / "source.md").write_text("config-relative source")
     config_path = config_dir / "sources.toml"
-    config_path.write_text(
-        """
+    config_path.write_text("""
 schema = 1
 
 [roots.notes]
 path = "docs"
 owner = "lee@leebase.com"
 include = ["*.md"]
-"""
-    )
+""")
 
     roots = load_config(config_path)
 
@@ -414,8 +436,7 @@ include = ["*.md"]
 
 def test_unknown_config_keys_are_collected_across_all_levels(tmp_path) -> None:
     config_path = tmp_path / "sources.toml"
-    config_path.write_text(
-        """
+    config_path.write_text("""
 schema = 1
 unexpected_top = true
 
@@ -428,8 +449,7 @@ unexpected_root = true
 [[roots.notes.overrides]]
 pattern = "faq.md"
 unexpected_override = true
-"""
-    )
+""")
 
     with pytest.raises(ConnectorConfigError) as caught:
         load_config(config_path)
@@ -459,6 +479,31 @@ def test_discover_skips_symlink_whose_target_escapes_the_root(tmp_path) -> None:
     assert discovered == {"notes:inside.md"}
     with pytest.raises(ConnectorReadError):
         connector.fetch("notes:escape.md")
+
+
+def test_symlinked_root_discovery_and_fetch_share_resolved_containment(
+    tmp_path,
+) -> None:
+    real_root = tmp_path / "real-root"
+    real_root.mkdir()
+    (real_root / "note.md").write_text("symlinked root content")
+    linked_root = tmp_path / "linked-root"
+    linked_root.symlink_to(real_root, target_is_directory=True)
+    connector = LocalFilesConnector(
+        (
+            RootConfig(
+                name="notes",
+                path=linked_root,
+                owner="lee@leebase.com",
+                include=("*.md",),
+            ),
+        )
+    )
+
+    discovered = connector.discover()
+
+    assert [obj.source_object_id for obj in discovered] == ["notes:note.md"]
+    assert connector.fetch("notes:note.md").content == "symlinked root content"
 
 
 def test_sync_pass_skips_unfetchable_object_and_continues(
@@ -496,25 +541,300 @@ def test_sync_pass_skips_unfetchable_object_and_continues(
     assert {hit.item.item_id.source_object_id for hit in hits} == {"notes:good.md"}
 
 
+def test_docx_parser_preserves_order_and_stable_section_references(tmp_path) -> None:
+    document = DocxDocument()
+    document.core_properties.title = "Operations Guide"
+    document.add_heading("Operations", level=1)
+    document.add_paragraph("The launch checklist is approved.")
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "Owner"
+    table.cell(0, 1).text = "Lee"
+    table.cell(1, 0).text = "Status"
+    table.cell(1, 1).text = "Ready"
+    payload = BytesIO()
+    document.save(payload)
+
+    connector = make_binary_connector(tmp_path, "guide.docx", payload.getvalue())
+    fetched = connector.fetch("notes:guide.docx")
+
+    assert fetched.document_type is DocumentType.DOCX
+    assert fetched.title == "Operations Guide"
+    assert "# Operations" in fetched.content
+    assert "The launch checklist is approved." in fetched.content
+    assert "Table 1 / Row 2" in fetched.content
+    chunks = chunk_document(
+        fetched.content,
+        item_id=KnowledgeItemId("local_files", "notes:guide.docx"),
+        project=DEFAULT_PROJECT,
+        document_type=DocumentType.DOCX,
+    )
+    assert [chunk.heading for chunk in chunks] == [
+        "Operations",
+        "Paragraph 1",
+        "Table 1 / Row 1",
+        "Table 1 / Row 2",
+    ]
+
+
+def test_docx_line_breaks_cannot_create_fake_section_citations(tmp_path) -> None:
+    document = DocxDocument()
+    document.add_paragraph("first line\n# source text, not a heading")
+    payload = BytesIO()
+    document.save(payload)
+    connector = make_binary_connector(tmp_path, "lines.docx", payload.getvalue())
+    fetched = connector.fetch("notes:lines.docx")
+    chunks = chunk_document(
+        fetched.content,
+        item_id=KnowledgeItemId("local_files", "notes:lines.docx"),
+        project=DEFAULT_PROJECT,
+        document_type=DocumentType.DOCX,
+    )
+
+    assert "first line # source text, not a heading" in fetched.content
+    assert all(chunk.heading != "source text, not a heading" for chunk in chunks)
+
+
+def test_xlsx_parser_extracts_sheet_rows_cells_formulas_and_cached_values(
+    tmp_path,
+) -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Summary"
+    sheet["A1"] = "Metric"
+    sheet["B1"] = "Value"
+    sheet["A2"] = "Total"
+    sheet["B2"] = "=SUM(B3:B3)"
+    sheet["A3"] = "Approved"
+    sheet["B3"] = 3
+    payload = BytesIO()
+    workbook.save(payload)
+
+    connector = make_binary_connector(tmp_path, "summary.xlsx", payload.getvalue())
+    fetched = connector.fetch("notes:summary.xlsx")
+
+    assert fetched.document_type is DocumentType.XLSX
+    assert "## Sheet 1: Summary" in fetched.content
+    assert "Sheet 1: Summary / Row 2" in fetched.content
+    assert "B2: (formula: =SUM(B3:B3); displayed value unavailable)" in fetched.content
+    assert "B3: 3" in fetched.content
+    chunks = chunk_document(
+        fetched.content,
+        item_id=KnowledgeItemId("local_files", "notes:summary.xlsx"),
+        project=DEFAULT_PROJECT,
+        document_type=DocumentType.XLSX,
+    )
+    assert any(chunk.heading == "Sheet 1: Summary / Row 2" for chunk in chunks)
+
+
+def test_pptx_parser_extracts_slide_body_and_speaker_notes(tmp_path) -> None:
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+    slide.shapes.title.text = "Launch Plan"
+    slide.placeholders[1].text = "The launch window is Friday."
+    slide.notes_slide.notes_text_frame.text = "Confirm the release owner."
+    payload = BytesIO()
+    presentation.save(payload)
+
+    connector = make_binary_connector(tmp_path, "plan.pptx", payload.getvalue())
+    fetched = connector.fetch("notes:plan.pptx")
+
+    assert fetched.document_type is DocumentType.PPTX
+    assert "# Slide 1: Launch Plan" in fetched.content
+    assert "The launch window is Friday." in fetched.content
+    assert "Slide 1 / Speaker notes" in fetched.content
+    assert "Confirm the release owner." in fetched.content
+
+
+@pytest.mark.parametrize(
+    ("filename", "payload", "kind"),
+    [
+        ("broken.docx", b"not an Office archive", ReadFailureKind.MALFORMED),
+        (
+            "encrypted.xlsx",
+            b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1encrypted",
+            ReadFailureKind.UNSUPPORTED,
+        ),
+    ],
+)
+def test_office_parser_failures_are_classified_without_raw_paths(
+    tmp_path, filename, payload, kind
+) -> None:
+    connector = make_binary_connector(tmp_path, filename, payload)
+
+    with pytest.raises(ConnectorReadError) as caught:
+        connector.fetch(f"notes:{filename}")
+
+    assert caught.value.kind is kind
+    assert str(tmp_path) not in str(caught.value)
+    assert "encrypted" in str(caught.value) or "malformed" in str(caught.value)
+
+
+def test_embedded_office_content_fails_closed_without_indexing_binary_data(
+    tmp_path,
+) -> None:
+    document = DocxDocument()
+    document.add_paragraph("Visible text must not be partially indexed.")
+    payload = BytesIO()
+    document.save(payload)
+    rewritten = BytesIO()
+    with zipfile.ZipFile(BytesIO(payload.getvalue())) as source:
+        with zipfile.ZipFile(rewritten, "w") as target:
+            for entry in source.infolist():
+                target.writestr(entry, source.read(entry.filename))
+            target.writestr("word/embeddings/unsafe.bin", b"binary payload")
+
+    connector = make_binary_connector(tmp_path, "embedded.docx", rewritten.getvalue())
+    with pytest.raises(ConnectorReadError) as caught:
+        connector.fetch("notes:embedded.docx")
+
+    assert caught.value.kind is ReadFailureKind.UNSUPPORTED
+    assert "binary payload" not in str(caught.value)
+
+
+def test_external_office_relationships_fail_closed(tmp_path) -> None:
+    document = DocxDocument()
+    document.add_paragraph("External relationship must not be followed.")
+    payload = BytesIO()
+    document.save(payload)
+    rewritten = BytesIO()
+    with zipfile.ZipFile(BytesIO(payload.getvalue())) as source:
+        with zipfile.ZipFile(rewritten, "w") as target:
+            for entry in source.infolist():
+                target.writestr(entry, source.read(entry.filename))
+            target.writestr(
+                "word/_rels/external.rels",
+                b'<Relationship TargetMode="External" '
+                b'Target="https://example.invalid" />',
+            )
+
+    connector = make_binary_connector(tmp_path, "external.docx", rewritten.getvalue())
+    with pytest.raises(ConnectorReadError) as caught:
+        connector.fetch("notes:external.docx")
+
+    assert caught.value.kind is ReadFailureKind.UNSUPPORTED
+    assert "example.invalid" not in str(caught.value)
+
+
+def test_temp_and_hidden_office_files_are_explicitly_excluded(tmp_path) -> None:
+    connector = make_connector(
+        tmp_path,
+        {
+            "visible.docx": "not a valid Office archive",
+            "~$visible.docx": "temporary lock file",
+            ".hidden.docx": "hidden file",
+            "nested/other.docx": "outside the top-level include scope",
+        },
+        include=("*.docx",),
+    )
+
+    report = connector.discover_report()
+
+    assert [obj.source_object_id for obj in report.objects] == ["notes:visible.docx"]
+    assert report.excluded_formats == {".docx": 2}
+    assert report.out_of_scope_formats == {".docx": 1}
+
+
+def test_discovery_failure_does_not_tombstone_temporarily_inaccessible_item(
+    tmp_path, repository, monkeypatch
+) -> None:
+    from lee_kb.main import _sync_connector
+
+    connector = make_connector(tmp_path, {"note.md": "stable source"})
+    _sync_connector(
+        connector,
+        repository,
+        root_filter=None,
+        sync_timestamp=SYNC_TIME,
+    )
+    previous_cursor = repository.get_connector_cursor(connector.connector_id)
+    original_describe = connector._describe
+
+    def unavailable(root, relative, file_path, handler):
+        if relative == "note.md":
+            raise ConnectorReadError(
+                "source object is temporarily inaccessible",
+                kind=ReadFailureKind.TEMPORARILY_INACCESSIBLE,
+            )
+        return original_describe(root, relative, file_path, handler)
+
+    monkeypatch.setattr(connector, "_describe", unavailable)
+    summary = _sync_connector(
+        connector,
+        repository,
+        root_filter=None,
+        sync_timestamp=SYNC_TIME + timedelta(hours=1),
+    )
+
+    item = repository.get_item(KnowledgeItemId("local_files", "notes:note.md"))
+    assert summary.deleted == 0
+    assert summary.failure_counts == {"temporarily_inaccessible": 1}
+    assert item is not None and not item.tombstone
+    assert repository.get_connector_cursor(connector.connector_id) == previous_cursor
+
+
+def test_missing_optional_root_does_not_tombstone_its_previous_items(
+    tmp_path, repository
+) -> None:
+    from lee_kb.main import _sync_connector
+
+    source_root = tmp_path / "optional"
+    source_root.mkdir()
+    (source_root / "note.md").write_text("optional root content")
+    connector = LocalFilesConnector(
+        (
+            RootConfig(
+                name="optional",
+                path=source_root,
+                owner="lee@leebase.com",
+                include=("*.md",),
+                required=False,
+            ),
+        )
+    )
+    _sync_connector(
+        connector,
+        repository,
+        root_filter=None,
+        sync_timestamp=SYNC_TIME,
+    )
+    cursor = connector.checkpoint(connector.discover())
+    (source_root / "note.md").unlink()
+    source_root.rmdir()
+
+    assert connector.list_changes(cursor) == ()
+
+    summary = _sync_connector(
+        connector,
+        repository,
+        root_filter=None,
+        sync_timestamp=SYNC_TIME + timedelta(hours=1),
+    )
+
+    item = repository.get_item(KnowledgeItemId("local_files", "optional:note.md"))
+    assert summary.deleted == 0
+    assert summary.failure_counts == {"temporarily_inaccessible": 1}
+    assert item is not None and not item.tombstone
+
+
 def test_unhandled_formats_are_counted_per_lowercase_extension(tmp_path) -> None:
     """A document a user expects to be searchable must never disappear
-    without a count -- office formats with no registered handler are
-    counted per extension instead of silently vanishing from discover()."""
+    without a count -- unknown formats are counted per extension instead of
+    silently vanishing from discover()."""
     connector = make_connector(
         tmp_path,
         {
             "keep.md": "indexable",
-            "report.docx": "office format, not yet handled",
-            "sheet.XLSX": "uppercase suffix normalizes to lowercase",
-            "deck.pptx": "office format, not yet handled",
+            "report.pdf": "binary format, not handled",
+            "sheet.XLS": "unknown format normalizes to lowercase",
+            "deck.bin": "binary format, not handled",
         },
-        include=("*.md", "*.docx", "*.XLSX", "*.pptx"),
+        include=("*.md", "*.pdf", "*.XLS", "*.bin"),
     )
 
     report = connector.discover_report()
 
     assert {obj.source_object_id for obj in report.objects} == {"notes:keep.md"}
-    assert report.unhandled_formats == {".docx": 1, ".xlsx": 1, ".pptx": 1}
+    assert report.unhandled_formats == {".bin": 1, ".pdf": 1, ".xls": 1}
 
 
 def test_discover_report_scopes_unhandled_formats_to_requested_root(tmp_path) -> None:
@@ -523,10 +843,9 @@ def test_discover_report_scopes_unhandled_formats_to_requested_root(tmp_path) ->
     root_a.mkdir()
     root_b.mkdir()
     (root_a / "alpha.md").write_text("alpha")
-    (root_b / "beta.docx").write_text("beta, unhandled format")
+    (root_b / "beta.pdf").write_text("beta, unhandled format")
     config_path = tmp_path / "sources.toml"
-    config_path.write_text(
-        f"""
+    config_path.write_text(f"""
 schema = 1
 
 [roots.a]
@@ -537,15 +856,14 @@ include = ["*.md"]
 [roots.b]
 path = "{root_b.as_posix()}"
 owner = "lee@leebase.com"
-include = ["*.docx"]
-"""
-    )
+include = ["*.pdf"]
+""")
     connector = LocalFilesConnector.from_config(config_path)
 
     report = connector.discover_report(root_name="b")
 
     assert report.objects == ()
-    assert report.unhandled_formats == {".docx": 1}
+    assert report.unhandled_formats == {".pdf": 1}
 
 
 def test_nested_roots_index_file_once_under_most_specific_root(
@@ -556,8 +874,7 @@ def test_nested_roots_index_file_once_under_most_specific_root(
     inner.mkdir(parents=True)
     (inner / "shared.md").write_text("one authoritative source document")
     config_path = tmp_path / "sources.toml"
-    config_path.write_text(
-        f"""
+    config_path.write_text(f"""
 schema = 1
 
 [roots.outer]
@@ -569,8 +886,7 @@ include = ["**/*.md"]
 path = "{inner.as_posix()}"
 owner = "lee@leebase.com"
 include = ["**/*.md"]
-"""
-    )
+""")
     connector = LocalFilesConnector.from_config(config_path)
 
     discovered = connector.discover()
@@ -586,6 +902,10 @@ include = ["**/*.md"]
     assert "nested roots detected" in health.detail
     assert "outer -> inner" in health.detail
 
+    scoped_report = connector.discover_report(root_name="outer")
+    assert scoped_report.objects == ()
+    assert scoped_report.claimed_by_other_root == {"inner": 1}
+
 
 def test_nested_root_claim_is_stable_across_repeated_discovery(tmp_path) -> None:
     outer = tmp_path / "outer"
@@ -593,8 +913,7 @@ def test_nested_root_claim_is_stable_across_repeated_discovery(tmp_path) -> None
     inner.mkdir(parents=True)
     (inner / "shared.md").write_text("stable source identity")
     config_path = tmp_path / "sources.toml"
-    config_path.write_text(
-        f"""
+    config_path.write_text(f"""
 schema = 1
 
 [roots.inner]
@@ -606,8 +925,7 @@ include = ["**/*.md"]
 path = "{outer.as_posix()}"
 owner = "lee@leebase.com"
 include = ["**/*.md"]
-"""
-    )
+""")
     connector = LocalFilesConnector.from_config(config_path)
 
     first_objects = connector.discover()

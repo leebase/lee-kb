@@ -50,8 +50,7 @@ def _env(workspace) -> dict:
 def _write_config(workspace, *, include=("*.md",), owner="lee@leebase.com") -> None:
     workspace["corpus"].mkdir(exist_ok=True)
     include_toml = ", ".join(f'"{pattern}"' for pattern in include)
-    workspace["config_path"].write_text(
-        f"""
+    workspace["config_path"].write_text(f"""
 schema = 1
 owner = "lee@leebase.com"
 
@@ -61,8 +60,7 @@ owner = "{owner}"
 include = [{include_toml}]
 visibility = "private"
 project = "default"
-"""
-    )
+""")
 
 
 def test_init_writes_starter_config(workspace) -> None:
@@ -144,8 +142,7 @@ def test_sync_workspace_root_flag_overrides_relative_root_base(tmp_path) -> None
     (workspace_root / "docs").mkdir(parents=True)
     (workspace_root / "docs" / "architecture.md").write_text("workspace content")
     config_path = config_dir / "sources.toml"
-    config_path.write_text(
-        """
+    config_path.write_text("""
 schema = 1
 workspace_root = "../wrong-workspace"
 
@@ -153,8 +150,7 @@ workspace_root = "../wrong-workspace"
 path = "docs"
 owner = "lee@leebase.com"
 include = ["*.md"]
-"""
-    )
+""")
 
     result = run_cli(
         "sync",
@@ -229,15 +225,15 @@ def test_sync_discovers_corpus_once_per_pass(tmp_path, monkeypatch) -> None:
 def test_sync_reports_unhandled_formats_in_summary(workspace) -> None:
     workspace["corpus"].mkdir()
     (workspace["corpus"] / "notes.md").write_text("# Notes\n\nindexable")
-    (workspace["corpus"] / "report.docx").write_text("office document placeholder")
-    _write_config(workspace, include=("*.md", "*.docx"))
+    (workspace["corpus"] / "report.pdf").write_text("binary document placeholder")
+    _write_config(workspace, include=("*.md", "*.pdf"))
 
     result = run_cli("sync", env_overrides=_env(workspace))
 
     assert result.returncode == 0
     assert "1 created" in result.stdout
     assert "1 unhandled format" in result.stdout
-    assert ".docx" in result.stdout
+    assert ".pdf" in result.stdout
 
 
 def test_sync_reports_skipped_token_shaped_content(workspace) -> None:
@@ -327,6 +323,27 @@ def test_ask_without_sync_reports_actionable_error(workspace) -> None:
     assert "Traceback" not in result.stderr
 
 
+def test_ask_reports_unknown_for_a_project_with_no_synchronized_content(
+    workspace,
+) -> None:
+    _write_config(workspace)
+    sync_result = run_cli("sync", env_overrides=_env(workspace))
+    assert sync_result.returncode == 0
+
+    result = run_cli(
+        "ask",
+        "what is in the empty project",
+        "--project",
+        "never-synced",
+        env_overrides=_env(workspace),
+    )
+
+    assert result.returncode == 0
+    assert "[unknown]" in result.stdout.lower()
+    assert "no synchronized content" in result.stdout.lower()
+    assert "[not_found]" not in result.stdout.lower()
+
+
 def test_ask_end_to_end_prints_answer_citations_confidence_and_receipt(
     workspace,
 ) -> None:
@@ -391,6 +408,29 @@ def test_ask_reports_not_found_for_an_unmatched_question(workspace) -> None:
     assert "searched projects" in result.stdout.lower()
 
 
+def test_ask_reports_not_found_after_the_only_item_is_deleted(workspace) -> None:
+    workspace["corpus"].mkdir()
+    source = workspace["corpus"] / "only.md"
+    source.write_text("# Only source\n\nunique deletion token.")
+    _write_config(workspace)
+    assert run_cli("sync", env_overrides=_env(workspace)).returncode == 0
+
+    source.unlink()
+    deletion_sync = run_cli("sync", env_overrides=_env(workspace))
+    assert deletion_sync.returncode == 0
+    assert "1 deleted" in deletion_sync.stdout
+
+    result = run_cli(
+        "ask",
+        "unique deletion token",
+        env_overrides=_env(workspace),
+    )
+
+    assert result.returncode == 0
+    assert "[not_found]" in result.stdout.lower()
+    assert "[unknown]" not in result.stdout.lower()
+
+
 def test_ask_database_flag_reads_projection_at_requested_path(workspace) -> None:
     workspace["corpus"].mkdir()
     (workspace["corpus"] / "architecture.md").write_text(
@@ -416,8 +456,7 @@ def test_sync_succeeds_when_an_optional_root_is_unreachable(workspace) -> None:
     """required = false keeps a missing root from blocking the pass."""
     workspace["corpus"].mkdir(exist_ok=True)
     (workspace["corpus"] / "note.md").write_text("# Note\n\ncontent")
-    workspace["config_path"].write_text(
-        f"""
+    workspace["config_path"].write_text(f"""
 schema = 1
 owner = "lee@leebase.com"
 
@@ -431,8 +470,7 @@ path = "{(workspace['corpus'].parent / 'not-here').as_posix()}"
 owner = "lee@leebase.com"
 include = ["*.md"]
 required = false
-"""
-    )
+""")
 
     result = run_cli("sync", env_overrides=_env(workspace))
 

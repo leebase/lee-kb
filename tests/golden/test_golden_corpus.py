@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import math
 import re
+import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-import tomllib
 
 from lee_kb.chunking import chunk_document
 from lee_kb.connectors.local_files import LocalFilesConnector, RootConfig

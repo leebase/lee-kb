@@ -28,15 +28,12 @@ Format handlers
 ----------------
 
 Discovery and fetch only recognize file extensions registered in
-``FORMAT_HANDLERS``. The v1 registry covers Markdown and plain text only;
-office formats (``docx``, ``xlsx``, ``pptx``) are deliberately not
-registered here even though :class:`lee_kb.contracts.DocumentType`
-enumerates them — the parsing libraries they need are new runtime
-dependencies and are deferred pending explicit approval (see Open Question 4
-in ``docs/sprint-1-contracts.md``). Extend the registry by adding a
-``FormatHandler`` to ``FORMAT_HANDLERS`` keyed by lowercase file suffix
-(including the leading dot); a handler needs only a ``document_type`` and a
-``decode`` callable from raw bytes to text.
+``FORMAT_HANDLERS``. The registry covers Markdown, plain text, and the
+approved deterministic Office parsers. A handler keeps a text-only ``decode``
+callable for compatibility and may provide ``parse`` to return safe metadata
+alongside normalized text. Office parsers reject encrypted packages,
+malformed archives, macros, embedded objects, media, external links, and
+parser exceptions rather than indexing a partial document.
 
 Change detection
 ----------------
@@ -45,9 +42,11 @@ There is no native change feed for a filesystem, so
 :meth:`LocalFilesConnector.list_changes` takes a snapshot cursor: a JSON
 object mapping ``source_object_id`` to its last-known ``content_hash``,
 produced by :meth:`LocalFilesConnector.checkpoint`. Diffing the current
-:meth:`LocalFilesConnector.discover` result against that snapshot yields
-created, updated, and deleted objects without depending on mtimes, which are
-unreliable across copies, clones, and restores.
+failure-aware discovery report against that snapshot yields created, updated,
+and deleted objects without depending on mtimes, which are unreliable across
+copies, clones, and restores. Read failures and blocked root/subtree prefixes
+are excluded from deletion diffing so an unavailable source is not mistaken
+for a deleted one.
 
 Nested roots
 ------------
@@ -91,15 +90,15 @@ content-level check applied at sync time; see
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
+import tomllib
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-
-import tomllib
 
 from ..contracts import (
     DEFAULT_PROJECT,
@@ -119,8 +118,11 @@ from .base import (
     FetchedDocument,
     HealthStatus,
     ObjectChange,
+    ReadFailure,
+    ReadFailureKind,
     SourceObject,
 )
+from .office import ParsedDocument, parse_docx, parse_pptx, parse_xlsx
 
 __all__ = [
     "CONFIG_SCHEMA_VERSION",
@@ -151,7 +153,18 @@ GLOBAL_DEFAULT_DENY = (
     "tmp/**",
     ".kb/**",
     ".git/**",
+    "**/~$*.docx",
+    "**/~$*.xlsx",
+    "**/~$*.pptx",
+    "**/._*.docx",
+    "**/._*.xlsx",
+    "**/._*.pptx",
+    "**/.*.docx",
+    "**/.*.xlsx",
+    "**/.*.pptx",
 )
+
+_OFFICE_SUFFIXES = frozenset({".docx", ".xlsx", ".pptx"})
 
 #: Small, conservative, documented pattern set for content that must never
 #: enter the projection unexamined -- mirrors the unconditional content scan
@@ -177,7 +190,17 @@ def contains_token_shaped_secret(content: str) -> bool:
     return any(pattern.search(content) for pattern in _TOKEN_SHAPED_PATTERNS)
 
 
-_TOP_LEVEL_KEYS = frozenset({"schema", "roots", "owner", "database", "workspace_root"})
+_TOP_LEVEL_KEYS = frozenset(
+    {
+        "schema",
+        "roots",
+        "owner",
+        "database",
+        "workspace_root",
+        "microsoft_graph",
+        "outlook",
+    }
+)
 _ROOT_KEYS = frozenset(
     {
         "path",
@@ -198,24 +221,44 @@ _OVERRIDE_KEYS = frozenset({"pattern", "authority", "trust"})
 
 @dataclass(frozen=True, slots=True)
 class FormatHandler:
-    """Decodes one file format into normalized text for a document type."""
+    """Parses one file format into normalized text for a document type."""
 
     document_type: DocumentType
     decode: Callable[[bytes], str]
+    parse: Callable[[bytes], ParsedDocument] | None = None
+
+    def parse_document(self, raw: bytes) -> ParsedDocument:
+        """Return normalized text and safe metadata for one raw artifact."""
+        if self.parse is None:
+            return ParsedDocument(content=self.decode(raw))
+        return self.parse(raw)
 
 
 def _decode_text(raw: bytes) -> str:
     return raw.decode("utf-8")
 
 
+def _decode_docx(raw: bytes) -> str:
+    return parse_docx(raw).content
+
+
+def _decode_xlsx(raw: bytes) -> str:
+    return parse_xlsx(raw).content
+
+
+def _decode_pptx(raw: bytes) -> str:
+    return parse_pptx(raw).content
+
+
 #: Registered file-format handlers, keyed by lowercase suffix (with dot).
-#: Add entries here to support new text-like formats; do not add office
-#: formats without approval (see the module docstring).
 FORMAT_HANDLERS: dict[str, FormatHandler] = {
     ".md": FormatHandler(DocumentType.MARKDOWN, _decode_text),
     ".markdown": FormatHandler(DocumentType.MARKDOWN, _decode_text),
     ".txt": FormatHandler(DocumentType.PLAIN_TEXT, _decode_text),
     ".text": FormatHandler(DocumentType.PLAIN_TEXT, _decode_text),
+    ".docx": FormatHandler(DocumentType.DOCX, _decode_docx, parse_docx),
+    ".xlsx": FormatHandler(DocumentType.XLSX, _decode_xlsx, parse_xlsx),
+    ".pptx": FormatHandler(DocumentType.PPTX, _decode_pptx, parse_pptx),
 }
 
 
@@ -507,14 +550,36 @@ def _matches(
     return not any(_glob_match(relative_posix, pattern) for pattern in exclude)
 
 
+def _office_inventory_reason(
+    relative_posix: str,
+    suffix: str,
+    include: Sequence[str],
+    exclude: Sequence[str],
+) -> str | None:
+    """Classify Office files rejected before format-handler lookup."""
+    if suffix not in _OFFICE_SUFFIXES:
+        return None
+    if any(_glob_match(relative_posix, pattern) for pattern in GLOBAL_DEFAULT_DENY):
+        return "excluded"
+    if any(_glob_match(relative_posix, pattern) for pattern in exclude):
+        return "excluded"
+    if not any(_glob_match(relative_posix, pattern) for pattern in include):
+        return "out_of_scope"
+    return None
+
+
 @dataclass(slots=True)
 class DiscoveryReport:
     """Everything one :meth:`LocalFilesConnector.discover_report` pass found.
 
-    Every file under a declared root is accounted for in exactly one place:
-    it is either in ``objects``, or counted in ``unhandled_formats``,
-    ``git_ignored``, or ``git_unresolved`` -- so "what did you NOT index,
-    and why?" always has an answer.
+    Every Office file in the direct inventory is accounted for in exactly one
+    place: it is either in ``objects``, counted in an explicit Office scope or
+    exclusion bucket, counted as an unhandled format, counted as git-ignored,
+    or represented by a safe read failure. This keeps "what did you NOT index,
+    and why?" answerable without broad binary discovery. Overlapping-root
+    candidates claimed by a more specific root are counted separately so a
+    root-scoped pass remains an explicit ownership scope rather than silently
+    omitting a file.
     """
 
     objects: tuple[SourceObject, ...]
@@ -528,6 +593,20 @@ class DiscoveryReport:
     #: ignore rule suppresses the configured root). Included in ``objects``
     #: when otherwise eligible -- unresolved is never treated as ignored.
     git_unresolved: int = 0
+    #: Office files under a root that remain outside its deliberate include
+    #: scope. This is an inventory signal, not a discovered source object.
+    out_of_scope_formats: dict[str, int] = field(default_factory=dict)
+    #: Office files matched by a root but protected by a global or root exclude.
+    excluded_formats: dict[str, int] = field(default_factory=dict)
+    #: Candidates seen through a requested root but owned by a more specific
+    #: overlapping root. Keys are the roots that claimed those candidates.
+    claimed_by_other_root: dict[str, int] = field(default_factory=dict)
+    #: Candidates that could not be hashed during discovery. Their IDs are
+    #: retained so an access failure is not mistaken for deletion.
+    failures: tuple[ReadFailure, ...] = ()
+    #: Root or subtree prefixes that could not be scanned and must not produce
+    #: deletion events for previously indexed objects.
+    blocked_source_prefixes: tuple[str, ...] = ()
 
 
 def _git_ignored_relatives(
@@ -660,29 +739,91 @@ class LocalFilesConnector(Connector):
 
         objects: list[SourceObject] = []
         unhandled_formats: dict[str, int] = {}
+        out_of_scope_formats: dict[str, int] = {}
+        excluded_formats: dict[str, int] = {}
+        claimed_by_other_root: dict[str, int] = {}
+        failures: list[ReadFailure] = []
+        blocked_source_prefixes: list[str] = []
         git_ignored = 0
         git_unresolved = 0
         for root in roots:
             if not root.path.is_dir():
+                blocked_source_prefixes.append(f"{root.name}:")
+                failures.append(
+                    ReadFailure(
+                        source_object_id=f"{root.name}:",
+                        kind=ReadFailureKind.TEMPORARILY_INACCESSIBLE,
+                        detail="source root is temporarily inaccessible",
+                    )
+                )
                 continue
             root_base = root.path.resolve()
             candidates: list[tuple[str, Path]] = []
-            for file_path in sorted(root.path.rglob("*")):
-                if not file_path.is_file():
-                    continue
-                relative = file_path.relative_to(root.path).as_posix()
-                if not _matches(relative, root.include, root.exclude):
-                    continue
-                resolved = file_path.resolve()
-                if root_base not in resolved.parents and resolved != root_base:
-                    # Same containment rule as _resolve(): a candidate whose
-                    # resolved target escapes its declared root (e.g. a
-                    # symlink out of the tree) is never handed out, so
-                    # discovery and fetch agree on which objects exist.
-                    continue
-                if self._claiming_root(root, resolved) is not root:
-                    continue
-                candidates.append((relative, file_path))
+            walk_errors: list[Path] = []
+
+            def record_walk_error(error: OSError) -> None:
+                if error.filename:
+                    walk_errors.append(Path(error.filename))
+                else:
+                    walk_errors.append(root.path)
+
+            for directory, directories, filenames in os.walk(
+                root.path, topdown=True, onerror=record_walk_error
+            ):
+                directories.sort()
+                filenames.sort()
+                for filename in filenames:
+                    file_path = Path(directory) / filename
+                    if not file_path.is_file():
+                        continue
+                    relative = file_path.relative_to(root.path).as_posix()
+                    suffix = file_path.suffix.lower()
+                    inventory_reason = _office_inventory_reason(
+                        relative, suffix, root.include, root.exclude
+                    )
+                    if inventory_reason == "out_of_scope":
+                        out_of_scope_formats[suffix] = (
+                            out_of_scope_formats.get(suffix, 0) + 1
+                        )
+                        continue
+                    if inventory_reason == "excluded":
+                        excluded_formats[suffix] = excluded_formats.get(suffix, 0) + 1
+                        continue
+                    if not _matches(relative, root.include, root.exclude):
+                        continue
+                    resolved = file_path.resolve()
+                    if root_base not in resolved.parents and resolved != root_base:
+                        # Same containment rule as _resolve(): a candidate whose
+                        # resolved target escapes its declared root (e.g. a
+                        # symlink out of the tree) is never handed out, so
+                        # discovery and fetch agree on which objects exist.
+                        continue
+                    claiming_root = self._claiming_root(root, resolved)
+                    if claiming_root is not root:
+                        claimed_by_other_root[claiming_root.name] = (
+                            claimed_by_other_root.get(claiming_root.name, 0) + 1
+                        )
+                        continue
+                    candidates.append((relative, file_path))
+
+            for error_path in walk_errors:
+                try:
+                    relative_error = error_path.relative_to(root.path).as_posix()
+                except ValueError:
+                    relative_error = ""
+                prefix = f"{root.name}:{relative_error}"
+                if relative_error:
+                    prefix += "/"
+                else:
+                    prefix = f"{root.name}:"
+                blocked_source_prefixes.append(prefix)
+                failures.append(
+                    ReadFailure(
+                        source_object_id=prefix,
+                        kind=ReadFailureKind.TEMPORARILY_INACCESSIBLE,
+                        detail="source subtree is temporarily inaccessible",
+                    )
+                )
 
             ignored, resolved_ok = _git_ignored_relatives(
                 root_base, [relative for relative, _ in candidates]
@@ -694,22 +835,34 @@ class LocalFilesConnector(Connector):
                 if resolved_ok and relative in ignored:
                     git_ignored += 1
                     continue
-                handler = FORMAT_HANDLERS.get(file_path.suffix.lower())
+                suffix = file_path.suffix.lower()
+                handler = FORMAT_HANDLERS.get(suffix)
                 if handler is None:
-                    suffix = file_path.suffix.lower() or "(no extension)"
+                    suffix = suffix or "(no extension)"
                     unhandled_formats[suffix] = unhandled_formats.get(suffix, 0) + 1
                     continue
                 try:
                     objects.append(self._describe(root, relative, file_path, handler))
-                except ConnectorReadError:
+                except ConnectorReadError as error:
                     # One unreadable candidate degrades discovery to a skip;
                     # it must not abort the whole pass.
-                    continue
+                    failures.append(
+                        ReadFailure(
+                            source_object_id=f"{root.name}:{relative}",
+                            kind=error.kind,
+                            detail=f"source object read failed: {error.kind.value}",
+                        )
+                    )
         return DiscoveryReport(
             objects=tuple(objects),
             unhandled_formats=unhandled_formats,
             git_ignored=git_ignored,
             git_unresolved=git_unresolved,
+            out_of_scope_formats=out_of_scope_formats,
+            excluded_formats=excluded_formats,
+            claimed_by_other_root=claimed_by_other_root,
+            failures=tuple(failures),
+            blocked_source_prefixes=tuple(sorted(set(blocked_source_prefixes))),
         )
 
     def _claiming_root(self, discovered_root: RootConfig, resolved: Path) -> RootConfig:
@@ -738,8 +891,20 @@ class LocalFilesConnector(Connector):
         try:
             raw = file_path.read_bytes()
             stat = file_path.stat()
+        except FileNotFoundError as error:
+            raise ConnectorReadError(
+                "source object became temporarily inaccessible",
+                kind=ReadFailureKind.TEMPORARILY_INACCESSIBLE,
+            ) from error
+        except PermissionError as error:
+            raise ConnectorReadError(
+                "source object is temporarily inaccessible",
+                kind=ReadFailureKind.TEMPORARILY_INACCESSIBLE,
+            ) from error
         except OSError as error:
-            raise ConnectorReadError(f"cannot read {file_path}: {error}") from error
+            raise ConnectorReadError(
+                "source object could not be read", kind=ReadFailureKind.UNREADABLE
+            ) from error
         authority, trust = root.metadata_for(relative)
         return SourceObject(
             source_object_id=f"{root.name}:{relative}",
@@ -758,7 +923,12 @@ class LocalFilesConnector(Connector):
 
     def list_changes(self, cursor: str | None = None) -> tuple[ObjectChange, ...]:
         previous = _decode_snapshot(cursor)
-        current = {obj.source_object_id: obj.content_hash for obj in self.discover()}
+        report = self.discover_report()
+        current = {obj.source_object_id: obj.content_hash for obj in report.objects}
+        protected_source_object_ids = frozenset(
+            failure.source_object_id for failure in report.failures
+        )
+        protected_source_prefixes = report.blocked_source_prefixes
 
         changes: list[ObjectChange] = []
         for source_object_id, content_hash in current.items():
@@ -781,6 +951,11 @@ class LocalFilesConnector(Connector):
                     )
                 )
         for source_object_id, previous_hash in previous.items():
+            if source_object_id in protected_source_object_ids or any(
+                source_object_id.startswith(prefix)
+                for prefix in protected_source_prefixes
+            ):
+                continue
             if source_object_id not in current:
                 changes.append(
                     ObjectChange(
@@ -802,12 +977,32 @@ class LocalFilesConnector(Connector):
         try:
             raw = file_path.read_bytes()
             stat = file_path.stat()
+        except FileNotFoundError as error:
+            raise ConnectorReadError(
+                "source object became temporarily inaccessible",
+                kind=ReadFailureKind.TEMPORARILY_INACCESSIBLE,
+            ) from error
+        except PermissionError as error:
+            raise ConnectorReadError(
+                "source object is temporarily inaccessible",
+                kind=ReadFailureKind.TEMPORARILY_INACCESSIBLE,
+            ) from error
         except OSError as error:
-            raise ConnectorReadError(f"cannot read {file_path}: {error}") from error
+            raise ConnectorReadError(
+                "source object could not be read", kind=ReadFailureKind.UNREADABLE
+            ) from error
         try:
-            content = handler.decode(raw)
+            parsed = handler.parse_document(raw)
         except UnicodeDecodeError as error:
-            raise ConnectorReadError(f"cannot decode {file_path}: {error}") from error
+            raise ConnectorReadError(
+                "source object could not be decoded", kind=ReadFailureKind.UNREADABLE
+            ) from error
+        except ConnectorReadError:
+            raise
+        except Exception as error:
+            raise ConnectorReadError(
+                "source parser failed", kind=ReadFailureKind.MALFORMED
+            ) from error
 
         authority, trust = root.metadata_for(relative)
         return FetchedDocument(
@@ -818,11 +1013,11 @@ class LocalFilesConnector(Connector):
                 label=relative,
             ),
             document_type=handler.document_type,
-            content=content,
+            content=parsed.content,
             content_hash=compute_content_hash(raw),
             source_timestamp=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
             project=root.project,
-            title=Path(relative).name,
+            title=parsed.title or Path(relative).name,
             authority=authority,
             trust=trust,
         )
@@ -878,8 +1073,9 @@ class LocalFilesConnector(Connector):
         root = self._roots_by_name.get(root_name)
         if root is None:
             raise ConnectorReadError(f"unknown root in source_object_id: {root_name!r}")
-        file_path = (root.path / relative).resolve()
-        if root.path not in file_path.parents and file_path != root.path:
+        root_base = self._resolved_paths_by_name[root_name]
+        file_path = (root_base / relative).resolve()
+        if root_base not in file_path.parents and file_path != root_base:
             raise ConnectorReadError(
                 f"source_object_id escapes its root: {source_object_id!r}"
             )

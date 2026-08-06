@@ -3,6 +3,708 @@
 > **Running log of completed work.** Newest entries are at the top. Each entry
 > records what changed, why it matters, and how to verify it.
 
+## 2026-08-05 - Project review and next-step recommendation
+
+### What Was Reviewed
+
+The current project state, active Sprint 5 plan, Microsoft Graph/Outlook
+implementation, repository and governance boundaries, latest independent review,
+and strategic project memory were reviewed. No Microsoft account, OAuth consent,
+mailbox, provider response, or external network request was used.
+
+### Result
+
+The offline implementation remains green: 368 tests pass, Black, Ruff,
+compileall, disclosure, diff, and CLI smoke checks pass, and the latest Graph
+follow-up remains a conditional offline pass with no High, Critical, or Medium
+implementation finding. The next bounded product step is the operator-gated
+live Outlook proof, not another connector feature.
+
+Three project-level follow-ups were recorded in
+`code-reviews/review-project-next-step-2026-08-05.md`: freeze the currently dirty
+worktree before external execution, reconcile the stale Phase 2/connector status
+in `project-plan.md`, and clarify that relationship persistence is deferred or
+requires a separate schema decision. The live proof remains blocked until the
+human operator approves the client, account, consent, and disposable folder.
+
+## 2026-08-05 — Sprint 5 Graph follow-up hardening and conditional offline pass
+
+### What Was Built
+
+The Microsoft Graph/Outlook slice was hardened after the initial independent
+review. OAuth grants remain transient until Graph client identity verification;
+verified subject and JWT tenant claims are retained and rechecked after token
+refresh. Raw device authentication, token loading, and unverified access are
+private implementation paths. Graph HTTP disables redirects, restricts the
+HTTPS port and security headers, bounds response/delta work, paces identity and
+resource requests, and avoids ambiguous refresh-token replay. Outlook locators,
+scope/cursor identity, project boundaries, attachment metadata, and one-401
+replay are fail-closed. Prepared external item/tombstone rounds now commit with
+their cursor in one SQLite transaction; empty rounds atomically record both the
+cursor and synchronized-project marker.
+
+The initial review's High owner-binding finding and all follow-up trust-boundary
+findings are closed in the current tree. The superseding independent review is
+`code-reviews/review-microsoft-graph-follow-up-2026-08-05.md`.
+
+### Why It Matters
+
+The shared foundation now keeps authentication identity, source scope,
+checkpoint state, repository projection, and disclosure boundaries aligned in
+the offline implementation. It remains deliberately smaller than an
+enterprise connector and does not claim a real Microsoft integration.
+
+### How to Verify
+
+- `python3 -m pytest tests/ -q` — **368 passed**.
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` — clean; 45 files unchanged.
+- `python3 -m ruff check src tests tools` — clean; existing top-level-settings deprecation warning only.
+- `python3 -m compileall -q src tests tools` — clean.
+- `python3 tools/check_disclosure.py` — clean over tracked and non-ignored repository files.
+- `git diff --check` — clean.
+- CLI help/version/auth/sync smoke checks — passed.
+- No live account, consent, mailbox, network request, commit, or production operation was performed.
+
+### Remaining Gate
+
+The offline verdict is a **conditional pass**. Operator approval and sanitized
+live evidence are still required for real consent, token storage, provider JWT
+claims, refresh/throttling behavior, immutable IDs, initial/incremental/no-change
+sync, restart and expired-delta recovery, attachment/body semantics, and
+governed mailbox retrieval. OneDrive remains design-only readiness work and
+OneNote remains explicitly unimplemented.
+
+## 2026-08-05 — Sprint 5 S5-02 atomic cursor-only repository advancement
+
+### What Was Built
+
+The approved first Sprint 5 task is implemented without connecting to
+Microsoft: `Repository.advance_cursor()` is an additive, fail-closed
+capability, and `SQLiteRepository` persists a cursor-only empty-delta advance in
+its own transaction. It changes only connector sync state; it does not create a
+knowledge item, chunk, permission, journal, receipt, or fabricated tombstone.
+Existing alternate repository providers remain instantiable and must explicitly
+implement the capability before live ingestion relies on it.
+
+`tests/test_repository.py` now proves an empty-delta cursor advances without
+projection rows and that a failure after the cursor write rolls back to the
+previous cursor.
+
+### Why It Matters
+
+Live delta synchronization must persist a new opaque cursor even when the
+provider reports no changes. This closes the repository boundary gap without
+weakening item/tombstone atomicity or changing the normalized connector
+contract.
+
+### How to Verify
+
+- `python3 -m pytest tests/test_repository.py -q` — **8 passed**.
+- Full Sprint 4 verification remains the baseline before this implementation;
+  the full suite and repository checks are re-driven before handoff.
+- No Microsoft connection, authentication, token storage, runtime HTTP
+  dependency, commit, or production operation was performed.
+
+## 2026-08-05 — Sprint 5 live Outlook proof planning
+
+### What Was Decided
+
+Sprint 4 is now recorded as the delivered, conditionally passed bounded offline
+connector slice. Outlook internals are frozen unless a live proof exposes a
+contract defect. Proposed Sprint 5 is a personal end-to-end Microsoft Graph
+proof using one approved account and one disposable folder.
+
+The scope answers five questions: authentication, initial sync, incremental
+sync, expired-delta recovery, and governed email answers with provenance. It
+explicitly excludes shared mailboxes, app-only access, multi-folder aggregation,
+enterprise administration, background polling, attachment bytes, and LLM
+synthesis.
+
+An additive repository capability for atomic cursor-only advancement on an empty
+delta is approved in principle. The exact method and transaction shape remain a
+Sprint 5 design task. No live connection, OAuth flow, token storage, runtime
+HTTP dependency, code change, commit, or production operation was performed by
+this planning step.
+
+### Why It Matters
+
+The next sprint will validate the architecture at its actual trust boundary:
+one real source account through transport, ingestion, persistence, retrieval,
+permissions, freshness, citations, and answer assembly. It avoids mistaking a
+well-tested adapter for a proven integration while preserving the personal-
+first scope.
+
+### How to Verify
+
+- `sprint-plan.md` records Proposed Sprint 5 tasks S5-01 through S5-07,
+  acceptance criteria, approval gates, and non-goals.
+- `architecture.md` records the additive atomic cursor-only persistence
+  direction without authorizing a live connection or breaking schema change.
+- `context.md` and `WHERE_AM_I.md` identify Sprint 4 as delivered and Sprint 5
+  as approval-gated planning.
+- Existing Sprint 4 verification remains green; that milestone's full suite
+  passed 324 tests with static checks, disclosure, diff, and CLI smoke checks
+  clean. The current Graph follow-up suite is recorded in the newer entry.
+
+## 2026-08-05 — BI-003 independent review hardening and conditional pass
+
+### Findings and Disposition
+
+The independent review recorded in `code-reviews/review-2026-08-05.md` found
+seven concrete offline defects and repaired them in the adapter and focused
+tests:
+
+- failed fetches could leave a pending pass checkpointable;
+- `lastModifiedDateTime` changes with unchanged body text were invisible to
+  hash-only change detection;
+- source-locator changes could leave stale citations without an update;
+- same-message delta events were biased toward an update instead of response
+  order;
+- checkpoint inputs could substitute metadata or duplicate source IDs;
+- provider-controlled health/error diagnostics could be echoed; and
+- attachment relationship IDs could collide across messages.
+
+The bounded offline slice is a **conditional pass** with no High/Critical
+finding. New cursors bind connector and mailbox scope, while legacy unbound
+version-1 cursors remain an explicit live multi-mailbox versioning decision.
+
+### What Was Built
+
+`OutlookConnector` now fingerprints source locator and modified-time metadata in
+its deterministic normalized hash, applies delta events in page order, rejects
+ambiguous duplicate events, blocks checkpointing after an unresolved fetch
+failure, requires exact completed `SourceObject` metadata, namespaces attachment
+relationships by immutable parent message, and suppresses provider-controlled
+diagnostic strings and exception causes. Folder moves remain one-folder
+semantics: a normal move out must be a deletion marker; an unexpected
+wrong-folder message fails closed.
+
+`tests/test_outlook_connector.py` grew from the initial six cases to 18 focused
+cases covering pagination, immutable identity, deletion/move behavior,
+quoted-history and attachment deduplication, metadata/content/locator drift,
+checkpoint safety, permissions, provenance, freshness, error disclosure, and
+the shared `Connector` boundary. `docs/outlook-connector.md`,
+`docs/connector-capability-matrix.md`, and `architecture.md` now state the
+hardened behavior and its limits.
+
+### Why It Matters
+
+The connector can no longer advance its in-memory checkpoint over a known
+failed fetch or stale source metadata, and the common repository receives a
+change whenever freshness or citation provenance changes. The slice remains
+offline and does not infer live Graph, OAuth, ACL, throttling, or attachment
+body behavior.
+
+### How to Verify
+
+- `python3 -m pytest tests/test_outlook_connector.py -q` — **18 passed**.
+- `python3 -m pytest tests/` — **322 passed**.
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` — clean; 36
+  files unchanged.
+- `python3 -m ruff check src tests tools` — clean; existing top-level-settings
+  deprecation warning only.
+- `python3 -m compileall -q src tests tools` — clean.
+- `python3 tools/check_disclosure.py` — clean.
+- `git diff --check` — clean.
+- `env PYTHONPATH=src python3 -m lee_kb.main --help`, `--version`, and
+  `ask --help` — exit 0.
+
+### Remaining Gated Work
+
+- Graph transport, OAuth/token storage, authenticated mailbox binding, body
+  representation, throttling/re-authentication, delta expiry recovery, and
+  live immutable-ID request enforcement remain approval-gated.
+- Legacy unbound cursor invalidation/versioning, durable no-op cursor
+  persistence, and relationship persistence through the common repository are
+  live integration design work, not claims of the offline adapter.
+- The conservative quoted-history heuristic and attachment-byte parsing remain
+  bounded-slice limitations.
+
+## 2026-08-05 — BI-003 bounded Outlook adapter and generated-seed reconciliation (initial delivery)
+
+### What Was Built
+
+The stale generated golden seed was reconciled with the current
+`project-plan.md`: the project-management case now asks for the current project
+phase status and expects the current `Phase 2 queued` evidence. The generated
+baseline was re-derived as 16/20 hit-at-1 (80.0%), 20/20 hit-at-10 (100.0%), and
+0.888 MRR. This remains an evaluation-harness seed, not the curated
+Chief-of-Staff benchmark; the OR-matcher decision and curated benchmark were
+not changed.
+
+BI-003 now has a bounded, offline Outlook/Microsoft 365 adapter in
+`src/lee_kb/connectors/outlook.py`. It implements the shared connector contract
+over an injected `OutlookTransport` for one delegated `/me` mailbox folder. The
+slice locks `Mail.Read` as the body-reading design, immutable message IDs,
+per-folder opaque delta links, `lastModifiedDateTime` freshness, deterministic
+quoted-history-safe normalization, explicit conversation/attachment
+relationships, private owner permissions, targeted refresh, and fail-closed
+checkpoint behavior. `tests/test_outlook_connector.py` verifies the adapter
+against a scripted transport and a real SQLite/governance projection.
+
+`docs/outlook-connector.md`, `docs/connector-capability-matrix.md`,
+`architecture.md`, `context.md`, `sprint-plan.md`, and `WHERE_AM_I.md` now
+separate this offline adapter from the still-gated Graph HTTP, OAuth, token
+storage, shared-mailbox, multi-folder, and attachment-body work.
+
+### Why It Matters
+
+Email now exercises the connector boundary against a native delta-shaped source
+without transmitting source content or weakening the personal SQLite release.
+The implementation proves stable identity, provenance, freshness, permissions,
+relationships, deletion semantics, and cursor safety before live credentials or
+provider operations are considered.
+
+### How to Verify (initial delivery, before review hardening)
+
+- `python3 -m pytest tests/test_outlook_connector.py -q` — **6 passed** (initial delivery).
+- `python3 -m pytest tests/` — **310 passed** (initial delivery).
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` — clean; 36
+  files unchanged.
+- `python3 -m ruff check src tests tools` — clean; existing top-level-settings
+  deprecation warning only.
+- `python3 -m compileall -q src tests tools` — clean.
+- `python3 tools/check_disclosure.py` — clean; no host paths or credentials.
+- `env PYTHONPATH=src python3 -m lee_kb.main --help` and `ask --help` — exit 0.
+- `git diff --check` — clean.
+
+## 2026-08-05 — BI-001 connector conformance and capability matrix
+
+### What Was Built
+
+The existing local connector boundary now has a focused conformance module at
+`tests/test_connector_conformance.py`. It exercises connector identity and
+configured scope, typed discovery, snapshot change detection, repeated no-change
+sync, fetch and refresh, permissions, source and synchronization timestamps,
+health, relationships, deletion behavior, and temporary read failures. The
+temporary-failure cases assert both sides of the governance boundary: a failed
+discovery cannot become a deletion, and a failed fetch leaves the prior cursor
+and projection in place for retry. The existing discovery-failure regression in
+`tests/test_local_connector.py` also now asserts cursor preservation.
+
+`docs/connector-capability-matrix.md` compares local directories, selected
+OneDrive folders, Outlook/Microsoft 365 mail, Gmail, and OneNote. It separates
+implemented local behavior from official provider evidence, partial mappings,
+and unknowns. The matrix recommends Outlook/Microsoft 365 mail as the first
+external connector experiment because its public Graph documentation covers
+per-folder delta, deleted-message markers, immutable IDs, timestamps, fetch
+formats, and read permissions. It also records the unresolved API and
+authentication questions without implementing or authorizing the connector.
+
+No production interface, persisted schema, runtime dependency, external
+connection, live credential, or BI-002 through BI-006 item changed.
+
+### Why It Matters
+
+BI-001 proves that the current source boundary can be tested without widening
+the personal SQLite release. It makes deletion versus temporary failure,
+checkpoint advancement, permission metadata, freshness, and source identity
+explicit before provider-specific code is introduced. It also keeps the current
+personal capability distinct from proposed small-group support and enterprise
+infrastructure that is not on the active roadmap.
+
+### How to Verify
+
+- `python3 -m pytest tests/test_connector_conformance.py tests/test_local_connector.py -q` — **42 passed**.
+- `python3 -m pytest tests/test_local_connector.py tests/test_cli.py -q` — **59 passed**.
+- `python3 -m pytest tests/` — **304 collected, 302 passed, 2 failed** in the pre-existing golden seed: `tests/golden/corpus.toml` expects `Active / Sprint 1`, while the already-modified `project-plan.md` now records Phase 1 as complete. This slice did not change the OR-matcher decision, the curated benchmark status, or that project-plan change.
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` — clean; 34 files unchanged.
+- `python3 -m ruff check src tests tools` — clean; the repository's existing top-level-settings deprecation warning remains.
+- `python3 -m compileall -q src tests tools` — clean.
+- `python3 tools/check_disclosure.py` — clean; no host paths or credentials.
+- `env PYTHONPATH=src python3 -m lee_kb.main --help` — exit 0.
+- `env PYTHONPATH=src python3 -m lee_kb.main ask --help` — exit 0.
+- `git diff --check` — clean.
+
+The requested static, disclosure, CLI, focused connector, and focused CLI
+checks are green. BI-001 behavior itself is covered, but the current tree is
+not yet a clean full-suite closure because of the unrelated golden-seed
+mismatch.
+
+## 2026-08-05 — Personal Second Brain positioning and connector backlog
+
+### What Was Built
+
+The product charter and architecture now describe lee-kb as a personal-first,
+governed Second Brain that is capable of growing into small shared projects
+without becoming an enterprise administration product. The strategic roadmap
+now queues personal connector expansion after the foundation, and the tactical
+sprint plan proposes a bounded connector-conformance slice.
+
+Six candidate backlog items were added under `backlog/candidates/`: connector
+conformance and capability mapping, OneDrive, Outlook/Microsoft 365, OneNote
+feasibility, Gmail, and a personal corpus scalability baseline. None is
+promoted to approved work; human curation remains required.
+
+### Why It Matters
+
+The delivered local connector and governed retrieval path are the foundation,
+not the product endpoint. Capturing connector identity, source scope,
+incremental state, access metadata, freshness, deletion, and temporary failure
+as explicit roadmap concerns prevents each external source from becoming a
+one-off ingestion system or forcing speculative tenant infrastructure into the
+personal release.
+
+### How to Verify
+
+- `backlog/candidates/` contains BI-001 through BI-006 with required schema fields.
+- `sprint-plan.md` marks Sprint 4 as a candidate and keeps Sprint 2's two open closure decisions explicit.
+- `architecture.md`, `product-definition.md`, `project-plan.md`, `context.md`, `WHERE_AM_I.md`, and `README.md` distinguish current capability, proposed connector work, small-group future support, and enterprise non-goals.
+- No source code or runtime dependencies changed in this work unit.
+
+## 2026-08-04 — Audit capability closure and final verification
+
+### What Was Built
+
+Governed retrieval no longer swallows an unsupported query-audit capability.
+`Repository.record_retrieval_event()` remains a concrete provider boundary for
+compatibility, but its default raises and `_record_retrieval_audit()` propagates
+that failure. A repository that cannot persist the required query event
+therefore fails closed instead of returning an unaudited evidence bundle. The
+governance suite adds a regression for this behavior.
+
+Current project memory and contract documents were also reconciled: Office
+approval and rollout are recorded as complete, schema-v2 additive migration is
+distinguished from wipe-and-resync fallback, and current test/baseline counts
+match the delivered tree.
+
+### Why It Matters
+
+Query-level audit persistence is part of the governed retrieval contract, not
+an optional SQLite feature. This preserves the replaceable repository boundary
+without allowing a provider to silently weaken the audit guarantee.
+
+### How to Verify
+
+- `python3 -m pytest tests/` — **298 passed**.
+- `python3 -m pytest tests/answers/test_answer_benchmarks.py -q` — **37 passed**.
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` — clean; 33 files unchanged.
+- `python3 -m ruff check src tests tools` — clean; existing top-level-settings deprecation warning only.
+- `python3 -m compileall -q src tests tools` — clean.
+- `python3 tools/check_disclosure.py` — clean.
+- `git diff --check` — clean.
+- CLI `--help`, `--version`, and `ask --help` — all exit 0.
+
+The post-audit independent review is a conditional pass with no High/Critical
+findings. Remaining work is limited to tracked low/advisory documentation and
+scope follow-ups, the OR-matcher decision, the curated benchmark, and explicit
+LLM/live-filesystem deferrals.
+
+## 2026-08-04 — Clause-local conflict polarity repair
+
+### What Was Built
+
+The post-audit review found that a negation in an unrelated conjunction could
+make `encrypted` versus `not encrypted` look equivalent when both statements
+also said `no external link`. Conflict detection now compares local polarity
+for shared non-value terms. Value-word comparisons also require complete
+opposition pairings, so `required` versus `required and no owner is assigned`
+remains an elaboration while genuine compound disagreements remain conflicts.
+Two public `answer()` regressions cover both directions.
+
+### Why It Matters
+
+Negation detection must identify disagreement in the proposition being asked
+about, not merely count negation tokens anywhere in a source sentence. The
+change prevents both hidden contradictions and false conflicts from unrelated
+negative clauses.
+
+### How to Verify
+
+- `python3 -m pytest tests/` — **297 passed**.
+- `python3 -m pytest tests/test_answer_conflict.py -q` — **7 passed**.
+- Black, Ruff, compileall, disclosure, and `git diff --check` — clean.
+
+Final independent review remains to be run against the audit-schema and this
+clause-polarity repair.
+
+## 2026-08-04 — Query-level retrieval audit events (S1-R-12)
+
+### What Was Built
+
+With explicit approval, the repository schema advanced to v2 and now persists a
+`RetrievalAuditEvent` for every governed retrieval outcome. Events retain query,
+principal, project, retrieval timestamp, candidate count, denied count, released
+count, truncation, and status. Empty, fully denied, mixed permitted/denied,
+stale-refused, and provider-failure queries are all durable without placing
+restricted source identity into the event. Version 1 databases migrate
+additively, including normalizing existing item schema versions.
+
+### Why It Matters
+
+Per-evidence receipts correctly describe released evidence, but they cannot
+represent an empty or denied query. The query-level event closes that audit gap
+without fabricating evidence-shaped receipts or weakening the permission
+boundary.
+
+### How to Verify
+
+- `python3 -m pytest tests/` — **295 passed**.
+- `python3 -m pytest tests/test_governance.py tests/test_repository.py tests/test_contracts.py -q` — **64 passed**.
+- `python3 -m pytest tests/answers/test_answer_benchmarks.py -q` — **37 passed**.
+- Black, Ruff, compileall, disclosure, and `git diff --check` — clean.
+
+Post-audit independent review remains to be run; the previous conditional-pass
+review found no High or Critical findings before this schema change.
+
+## 2026-08-04 — Conflict edge-case and golden-baseline repair
+
+### What Was Built
+
+The independent follow-up review found one remaining false conflict: a positive
+value such as `required` paired with its explicitly negated opposite, `not
+optional`, is emphatic agreement rather than disagreement. A second probe then
+found that an agreement pair could hide a separate `approved` versus `denied`
+disagreement in a compound statement. Conflict detection and merge refusal now
+require complete value-set agreement, and the benchmark adds regressions for
+both exact shapes.
+
+The golden harness also exposed a genuine rank improvement from the current
+projection: `architecture-04` moved from rank 2 to rank 1. The recorded gate
+now reflects 14/20 hit-at-1 and 0.816 MRR, with the per-question table updated.
+
+### Why It Matters
+
+The answer layer must not fabricate a conflict from semantically equivalent
+positive/negated value phrasing. The baseline remains an enforced measurement
+contract, so an observed improvement is recorded rather than silently ignored.
+
+### How to Verify
+
+- `python3 -m pytest tests/golden/test_golden_corpus.py tests/answers/test_answer_benchmarks.py -q` — **62 passed** before the final full-suite rerun.
+- `python3 -m pytest tests/answers/test_answer_benchmarks.py -q` — **37 passed**.
+- Direct rank probe: 70.0% hit-at-1, 0.815555... MRR; documented as 70.0% and 0.816.
+
+The final independent closure review is a conditional pass; only the
+query-level audit-event decision remains open.
+
+## 2026-08-04 — Final cold-review follow-up repairs
+
+### What Was Built
+
+The final cold review (`code-reviews/review-2026-08-04.md`) reproduced one High
+connector defect plus related Medium edge cases. The follow-up repaired the
+public `LocalFilesConnector.list_changes()` contract to diff a failure-aware
+discovery report, so failed roots and subtrees cannot become deletion events.
+Root-scoped overlapping ownership is now counted as `claimed_by_other_root`.
+
+Office extraction now recursively retains nested DOCX table text. DOCX and PPTX
+body/note text that begins with Markdown heading syntax is escaped before the
+common Office chunker runs, preventing user content from becoming citation
+structure. `ask` now distinguishes a never-synchronized project from a
+previously synchronized project whose items are all tombstoned.
+
+Freshness refusal is evaluated before release receipts are persisted, and the
+package/README compatibility floor is aligned to Python 3.11 for unconditional
+`tomllib`. A durable query-level audit event for empty or any denied retrieval
+remains pending because it requires an approved persisted-schema
+change; released evidence continues to use the existing per-evidence receipt
+contract.
+
+### Why It Matters
+
+The public connector contract no longer permits a transient filesystem outage
+to erase projection state, and Office normalization no longer silently loses
+nested content or invents structural citations from user text. Answer absence
+and stale-evidence reporting now preserve the distinction between searched,
+unresolved, and refused states.
+
+### How to Verify
+
+- `python3 -m pytest tests/` — **292 passed** after the compound-value conflict repair.
+- `python3 -m pytest tests/answers/test_answer_benchmarks.py -q` — **37 passed**.
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` — clean; 33 files unchanged.
+- `python3 -m ruff check src tests tools` — clean; existing configuration deprecation warning only.
+- `python3 -m compileall -q src tests tools` — clean.
+- `python3 tools/check_disclosure.py` — clean.
+- `git diff --check` — clean.
+- `env PYTHONPATH=src python3 -m lee_kb.main --help` and `--version` — both exit 0.
+
+The independent follow-up review is a conditional pass with no High or Critical
+findings. Only the S1-R-12 query-level audit decision remains open before
+release closure.
+
+## 2026-08-04 — Repair of round-three contradiction regressions (S3-R-17 through S3-R-21); two-direction benchmark guard
+
+### What Was Built
+
+The independent round-three review (`code-reviews/review-sprint-3-repair-3.md`,
+verdict `fail`) found that the previous conflict repair traded false conflicts
+for missed contradictions. This repair addresses all five findings from that
+review:
+
+- **S3-R-17 (High)** — conflict detection and merge refusal now share a
+  polarity-aware negation signal. `not`, `never`, `no`, `none`, `cannot`, and
+  contractions are compared after removing the polarity token; de-negated
+  value words must match exactly, so `required` versus `required, not optional`
+  remains elaboration. A non-value-word negation such as `encrypted` versus
+  `not encrypted` now yields two claims and one conflict, and the merge refusal
+  remains correct when `detect_conflicts` is bypassed.
+- **S3-R-18 (High)** — ordinary same-authority substitutions now count as
+  positive disagreement when canonical term counts differ by exactly one term
+  on each side and share an otherwise matching frame. This catches proper-noun,
+  weekday, and place substitutions without treating elaboration as conflict.
+- **S3-R-19 (Medium)** — declared authority no longer detects a conflict by
+  itself. It only changes the detail of a positive substitution signal, so
+  cross-authority voice changes and elaborations remain conflict-free.
+- **S3-R-20 (Medium)** — the value-word path now requires an opposition rather
+  than any unequal value-word set, and polarity handling requires equal
+  de-negated value sets. Emphatic agreement is therefore not reported as a
+  conflict.
+- **S3-R-21 (Medium)** — the benchmark report now describes the actual
+  mechanism and current counts. The permanent suite adds five contradiction
+  shapes, an emphatic-agreement case, a detection-bypass case, and a fixed
+  two-direction rate guard over same- and cross-authority pairs.
+
+`answer.py` and `answer_conflict.py` now share canonical inflection-aware
+meaningful-term comparison. No model client or runtime dependency was added;
+the answer path remains deterministic and offline, with no Anthropic or other
+provider call involved in this repair.
+
+### Why It Matters
+
+The prior round could still return one synthesized claim asserting a statement
+and its negation, or silently omit a same-authority substitution. It could also
+call cross-authority agreement a conflict. These are opposite-direction
+correctness failures, so the new regression guard measures both: 14 fixed
+non-competing cases produce zero conflicts, 10 fixed contradicting cases
+produce one conflict and two singly-cited claims, and the negated non-value
+word case stays split even with conflict detection neutralized.
+
+### How to Verify
+
+- `python3 -m pytest tests/` — **261 passed** in 30.62s.
+- `python3 -m pytest tests/answers/test_answer_benchmarks.py -q` — **35 passed** in 4.84s.
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` — clean; 31 files unchanged.
+- `python3 -m ruff check src tests tools` — clean; only the existing linter-settings deprecation warning remains.
+- `python3 -m compileall -q src tests tools` — clean.
+- `python3 tools/check_disclosure.py` — clean; no host paths or credentials.
+- `git diff --check` — clean.
+
+## 2026-08-04 — Round-three repair of the governed `answer()` surface (S3-R-15, S3-R-12, S3-R-16); full verification re-confirmed green; benchmark results re-derived
+
+### What Was Built
+
+An independent re-review of round two's repair (`code-reviews/review-sprint-3-repair-2.md`,
+verdict `fail`) found that round two's fix carried an unmentioned side effect:
+an undiscriminating branch in `_conflict_signal` reported a `Conflict`
+whenever two same-topic statements' meaningful terms differed above a
+similarity floor, with no test that the difference was an actual
+disagreement. Three findings from that review are repaired for this step:
+
+- **S3-R-15 (High, correctness / honest reporting)** — the structural-
+  divergence branch (`src/lee_kb/answer_conflict.py`, previously the last
+  check in `_conflict_signal`) reported agreement as disagreement on ordinary
+  paraphrase, elaboration, and voice change: the reviewer measured 5 of 6
+  constructed agreeing pairs flagged as conflicts, up from 1 of 6 pre-round-two,
+  including the project's own harbor-readiness benchmark fixture (the
+  duplicate-repository statement against the independent-audit statement,
+  differing only by the word "confirms"). The branch is now removed entirely
+  and replaced by two positive-evidence signals: `_morphological_antonyms_diverge`
+  (a new `_is_prefixed_antonym` check for recognized `dis-`/`non-`/`un-`
+  antonym pairs, e.g. `restricted`/`unrestricted`) ahead of the existing
+  authority-divergence branch, and a superset/elaboration rule applied to both
+  `_value_words_diverge` and `_statements_mergeable`: when one statement's
+  meaningful terms (or value words) are a strict superset of the other's, that
+  is elaboration, not disagreement, and no longer flags a conflict or blocks a
+  merge. `_numbers_diverge` also gained a `_numeric_quantities` unit-aware
+  comparison so a shared unit (days, hours, percent, ad hoc words) is compared
+  per-unit rather than by raw numeric-literal overlap alone. Two new
+  regression families were added to `tests/answers/test_answer_benchmarks.py`:
+  `test_non_competing_statement_pairs_produce_no_conflicts` (6 parametrized
+  agreeing-pair cases — voice change, elaboration, synonym restatement, an
+  added qualifier, cross-root restatement, formatting-only) asserting
+  `result.conflicts == ()`, and two new cases added to the renamed
+  `test_contradicting_statement_pairs_produce_one_conflict_with_cited_sides`
+  (`canonical-versus-derived`, a fresh authority-divergence fixture, and
+  `morphological-antonym-outside-word-list`, the first same-authority
+  contradiction proven through the new positive antonym signal rather than
+  the removed similarity branch) asserting genuine contradictions still
+  produce exactly one `Conflict`. `tests/answers/test_answer_benchmarks.py`
+  now collects 27 items, up from 19.
+- **S3-R-12 (Medium, correctness)** — the pre-existing narrower instance of
+  the same defect (`_conflict_signal`'s value-word branch reporting a
+  `Conflict` on elaboration, e.g. "required" vs. "required and approved") is
+  closed by the same superset rule that fixes S3-R-15, since it is a special
+  case of the same underlying bug.
+- **S3-R-16 (Medium, documentation accuracy)** — the round-two benchmark
+  document described that round's conflict-detection work as two changes
+  (inverting the merge rule, adding a numeric-divergence signal) without
+  naming the third, undiscriminating branch, and did not report its effect on
+  the harbor-readiness question's conflict count. Corrected by this step's
+  rewrite of `docs/answer-benchmark-results.md`, which now names the removed
+  branch, its replacement signals, and states the harbor-readiness
+  conflict-count change explicitly in Confidence Distribution.
+
+This step additionally re-drove full verification and updated documentation
+to match the repaired behavior: `docs/answer-benchmark-results.md` now
+reports 27 collected benchmark items, a re-verified Confidence Distribution
+(11 `DIRECTLY_EVIDENCED`, 0 `SYNTHESIZED`, 1 conflict total across the five
+family-7 questions — the spurious harbor-readiness conflict introduced by
+round two's regression is gone), and two new Conflict Examples entries: the
+`morphological-antonym-outside-word-list` (Phoenix) same-authority
+contradiction — the shape the previous document could not demonstrate,
+since round two's out-of-vocabulary examples were only proven through the
+now-removed undiscriminating branch — and a non-conflict regression example
+(Halcyon elaboration) demonstrating the fixed false-positive directly. The
+Recommendation remains **Ready after specific follow-up** — S3-R-12,
+S3-R-15, and S3-R-16 are fixed and regression-tested; the carried-forward
+Medium findings (S3-R-04, S3-R-05) and Low findings (S3-R-07, S3-R-08,
+S3-R-09, all documentation accuracy) remain open, alongside the pre-existing
+deferrals (LLM-backed synthesis provider, real-corpus measurement, live
+filesystem verification, and the two inherited `retrieve()` open questions).
+
+### Why It Matters
+
+S3-R-15 is a false-positive-in-the-opposite-direction defect: unlike S3-R-01/
+S3-R-02/S3-R-03/S3-R-10/S3-R-11, which suppressed or merged a correct answer,
+S3-R-15 fabricated disagreement between sources that agreed, on the project's
+own benchmark corpus and visible through the shipped `lee-kb ask` command's
+`Conflicts:` section. A reader cannot use a `Conflicts:` section that reports
+noise, and a machine consumer filtering on `conflicts` would receive mostly
+false positives. The fix is a genuine tightening, not a narrower patch: it
+requires *positive* evidence of disagreement (a recognized antonym or a
+diverging number/value-word pair) rather than *mere difference*, and the new
+5e family specifically asserts the direction the suite had never pinned
+before — that agreeing statements produce zero conflicts — closing the gap
+`code-reviews/review-sprint-3-repair-2.md`'s residual risk 6 named: each of
+the first three repair rounds pinned the shape it was found against while
+leaving the opposite direction unpinned.
+
+### How to Verify
+
+Preserved system-validator evidence for this step
+(`agent_orch.validators.command_succeeds@1`; validator rerun not permitted,
+so these are reported, not re-executed):
+
+| # | Command | Exit | Result | Tied to | Evidence hash |
+|---|---------|-----:|--------|---------|---------------|
+| 1 | `python3 -m pytest tests/` | 0 | 253 passed in 25.64s | step_01_positive_contradiction_signal acceptance criterion, attempt 1 | `b66fa8133905c8aea3007eb76a589e2fe8f6967ce72a8ce24743dffeacc3482c` |
+| 2 | `python3 -m pytest tests/` | 0 | 253 passed in 26.61s | step_01_positive_contradiction_signal acceptance criterion, attempt 2 | `b7d7b1184f5ff5cb051aebd1b4cd743dbdfb3c256ad925a0573be57430de4123` |
+
+Fresh in this step (not preserved evidence):
+
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` — clean,
+  `31 files would be left unchanged`, exit 0, no reformatting needed.
+- `python3 -m ruff check src tests tools` — clean, exit 0 (the same
+  pre-existing `pyproject.toml` linter-settings deprecation warning tracked
+  as S2-R-10 remains, out of this step's scope).
+- `python3 -m compileall -q src tests tools` — clean, exit 0, no output.
+- `python3 tools/check_disclosure.py` — clean, exit 0: `check_disclosure:
+  clean — no host paths or credentials in tracked files.`
+- `git diff --check` — clean, exit 0, no output.
+- `python3 -m pytest tests/answers/ -v` — 27 passed in 1.84s, exit 0
+  (supplementary, not preserved evidence — used to confirm the new and
+  expanded regression fixtures collect and pass, and to derive the
+  per-family table in `docs/answer-benchmark-results.md`).
+- `docs/answer-benchmark-results.md` — rewritten to reflect the round-three
+  repaired behavior: updated Benchmark Cases (27 items, two families
+  changed), a Confidence Distribution that now states the family-7
+  conflict-count change explicitly, two new Conflict Examples entries
+  (a same-authority morphological-antonym contradiction and a non-conflict
+  elaboration regression), and a Recommendation that states the still-open
+  Medium and Low findings plainly rather than implying full resolution.
+
 ## 2026-08-04 — Round-two repair of the governed `answer()` surface (S3-R-10, S3-R-11); full verification re-confirmed green; benchmark results re-derived
 
 ### What Was Built
