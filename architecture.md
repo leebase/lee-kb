@@ -276,9 +276,17 @@ The library is the primary product. Surfaces are thin layers over it:
 
 CLI (v1) → Knowledge Library
 
-MCP Server (Phase 2) → Knowledge Library
+MCP Server (KB-R1) → Knowledge Library
 
 Every consumer surface exercises the exact same public retrieval API.
+
+The KB-R1 MCP adapter is stdlib JSON-RPC 2.0 over newline-delimited stdio and
+preserves the incumbent `kb_search`, `kb_status`, and `kb_compile_preview`
+tool contracts. It is a thin deployment surface: it never synchronizes,
+builds, or writes corpus files. Search and preview call governed `retrieve()`
+and therefore persist the same release receipts and query audit events as the
+CLI. Registration and consumer cutover are deployment work, not part of this
+library boundary.
 
 ---
 

@@ -34,6 +34,7 @@ dev = [
 
 [project.scripts]
 lee-kb = "lee_kb.main:main"
+lee-kb-mcp = "lee_kb.mcp:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

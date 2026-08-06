@@ -267,6 +267,22 @@ principal cannot see is reported only as a withheld count, never its
 content. `ask` accepts `--database` (see the `sync` overrides above);
 `search` does not.
 
+### 5. MCP
+
+lee-kb provides the incumbent-compatible MCP surface through stdio JSON-RPC:
+
+```bash
+LEE_KB_CONFIG=/path/to/config.toml python3 -m lee_kb.mcp
+# or, after installation:
+LEE_KB_CONFIG=/path/to/config.toml lee-kb-mcp
+```
+
+It exposes `kb_search`, `kb_status`, and the read-only
+`kb_compile_preview` tools. `kb_search` preserves the incumbent result fields
+and adds governed citations, freshness, and retrieval receipts. See
+`docs/kb-r1-mcp-parity.md` for the exact contract and the explicit
+registration/cutover boundary.
+
 ## AgentFlow workflow
 
 Project memory is kept in the root documents. Start with `AGENTS.md`, then

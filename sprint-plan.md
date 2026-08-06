@@ -12,6 +12,54 @@
 > "Sprint 2". Sprint 1 — Personal Foundation is delivered; its record is
 > preserved below, unchanged, under "Sprint 1 (Delivered)".
 
+## Sprint KB-R1 — MCP parity surface (Delivered 2026-08-06)
+
+**Status:** Successor MCP surface implemented and verified; registration and
+cutover remain explicitly out of scope
+
+**Goal:** Let Employee Zero's existing MCP client protocol address lee-kb with
+the incumbent tool names and compatible wire shapes, while routing released
+evidence through governed retrieval and attaching lee-kb receipts additively.
+
+### Scope
+
+- Implement stdlib JSON-RPC 2.0 over newline-delimited stdio in
+  `src/lee_kb/mcp.py`.
+- Preserve `kb_search`, `kb_status`, and `kb_compile_preview`, including their
+  required input fields, bounds, response envelope, and JSON-RPC error behavior.
+- Use the existing `LEE_KB_CONFIG`/SQLite configuration and the configured
+  owner as the retrieval principal.
+- Additive receipt, freshness, provenance, denial, and truncation fields only;
+  no incumbent result field is removed or renamed.
+- Provide `python3 -m lee_kb.mcp` and the `lee-kb-mcp` console entrypoint.
+
+### Explicitly out of scope
+
+- Any `.mcp.json` change or MCP registration.
+- Consumer cutover, production operations, or modification of `kb-index`.
+- The incumbent file-writing `kb compile` command.
+- The KB-R2 benchmark and acceptance decision over the real Employee Zero
+  corpus.
+
+### Acceptance criteria and evidence
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Exact three-tool surface and input schemas | ✅ Complete | `tests/test_mcp.py::test_tool_surface_matches_kb_index_contract` |
+| Stdio handshake, tools/list, JSON-RPC errors | ✅ Complete | `tests/test_mcp.py` subprocess client tests |
+| Representative search preserves incumbent result fields | ✅ Complete | `test_kb_search_preserves_result_shape_and_attaches_receipts` |
+| Receipts are persisted and exposed additively | ✅ Complete | Search test inspects MCP payload and SQLite receipt |
+| Status and preview remain shape-compatible | ✅ Complete | Status and compile-preview tests |
+| Full project verification | ✅ Complete | 374 pytest tests; Ruff, compileall, disclosure, diff, and per-file Black checks clean; the multi-file Black command emitted an all-clean report but did not exit under the installed formatter build |
+
+### KB-R2 handoff
+
+Benchmark incumbent and successor tool calls on the same fixture and approved
+Employee Zero corpus. Compare latency, fresh/stale behavior, citations,
+authority/trust ordering, empty/denied results, preview text, and receipt/audit
+accounting before deciding whether the semantic differences documented in
+`docs/kb-r1-mcp-parity.md` are acceptable for KB-R3 cutover.
+
 ## Sprint 4 — Personal Connector Foundation (Delivered 2026-08-05)
 
 **Status:** Bounded offline connector slice delivered and hardened; conditional offline pass; live external integration remains gated

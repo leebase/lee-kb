@@ -9,9 +9,9 @@
 |-----------|-------|
 | **Project** | Lee Knowledge Base (`lee-kb`) |
 | **Profile** | Python package / governed retrieval service |
-| **Current Phase** | Personal-first Second Brain foundation complete; Microsoft Graph foundation and live-capable Outlook path delivered; real mailbox proof remains operator-gated |
-| **Overall Status** | 🟡 Two governed surfaces now exist: `retrieve()` and `answer()`/`lee-kb ask`. Office DOCX/XLSX/PPTX handlers use the common connector, repository, retrieval, permission, citation, and receipt path; the 39-file live inventory is explicitly accounted for and the final real projection contains 1,235 documents / 18,601 chunks. The Microsoft Graph foundation now owns delegated auth, verified account binding, secure token lifecycle, HTTP, retry/throttling/rate limiting, pagination, delta recovery, and normalized errors; `GraphOutlookTransport` wires one credential-bound folder into the common SQLite/checkpoint path. No real account was connected by automated tests. Deferred: operator-run mailbox proof, relationship persistence, attachment-body ingestion, an LLM-backed synthesis provider, the curated Chief-of-Staff golden benchmark, live filesystem verification of `ask` over time, and the OR-matcher decision |
-| **Last Updated** | 2026-08-05 |
+| **Current Phase** | Personal-first Second Brain foundation complete; Microsoft Graph foundation and live-capable Outlook path delivered; KB-R1 MCP parity surface delivered; real mailbox proof and MCP cutover remain operator-gated |
+| **Overall Status** | 🟡 Three governed access surfaces now exist: `retrieve()`, `answer()`/`lee-kb ask`, and the incumbent-compatible KB-R1 MCP adapter. Office DOCX/XLSX/PPTX handlers use the common connector, repository, retrieval, permission, citation, and receipt path; the 39-file live inventory is explicitly accounted for and the final real projection contains 1,235 documents / 18,601 chunks. The Microsoft Graph foundation now owns delegated auth, verified account binding, secure token lifecycle, HTTP, retry/throttling/rate limiting, pagination, delta recovery, and normalized errors; `GraphOutlookTransport` wires one credential-bound folder into the common SQLite/checkpoint path. No real account was connected by automated tests. Deferred: KB-R2 benchmark and KB-R3 registration/cutover, operator-run mailbox proof, relationship persistence, attachment-body ingestion, an LLM-backed synthesis provider, the curated Chief-of-Staff golden benchmark, live filesystem verification of `ask` over time, and the OR-matcher decision |
+| **Last Updated** | 2026-08-06 |
 
 ## Progress Against Product Goals
 
@@ -31,6 +31,7 @@ Reference: `product-definition.md` and `architecture.md`.
 | Retrieval receipts are recorded | ✅ Done | One `RetrievalReceipt` persisted per evidence item, including the empty-result case; verified by `tests/test_governance.py` |
 | A governed answer surface returns cited claims, not raw evidence | ✅ Done | `answer()` (`src/lee_kb/answer.py`) and `lee-kb ask`; claim assembly, conflict identification without a winner, and absence classification that never collapses `NOT_FOUND`/`INACCESSIBLE`/`UNKNOWN`; verified against seven benchmark families in `tests/answers/test_answer_benchmarks.py` and reported in `docs/answer-benchmark-results.md` |
 | Answer synthesis is attributable and auditable | ✅ Done (offline default) | `DeterministicSynthesisProvider` is the default `SynthesisProvider`, template-only and standard-library-only; `synthesis_provider_id` names whichever provider ran. An LLM-backed provider is specified but unimplemented, pending explicit dependency approval — see below |
+| Incumbent MCP surface is available on the successor | ✅ KB-R1 done | `src/lee_kb/mcp.py` preserves `kb_search`, `kb_status`, and `kb_compile_preview` over stdio JSON-RPC, with additive governed receipt data; registration and cutover are KB-R3, not this slice |
 
 Office-format parsing is now implemented and documented in
 `docs/office-ingestion.md`. The real-corpus rollout accounts for all 39 live
@@ -68,8 +69,14 @@ synthetic SQLite projection, not a live corpus.
 | Sprint 3 — Governed `answer()` Surface | Layer cited claims, confidence, conflicts, and absences on top of `retrieve()`; ship `lee-kb ask` | 🟢 Delivered (37-item two-direction conflict regression set, S3-R-04/S3-R-05, and round-four repairs complete; LLM-backed synthesis and live filesystem verification of `ask` remain deferred) |
 | Sprint 4 — Personal Connector Foundation | Prove the connector boundary and map the first external connector family | 🟢 Bounded offline BI-003 slice delivered and conditionally passed independent review |
 | Sprint 5 — Microsoft Graph Foundation and Live Outlook Proof | Build shared Graph plumbing and prove one real mailbox end to end through the governed connector path | 🟡 Foundation delivered offline; live account/consent proof remains gated |
+| Sprint KB-R1 — MCP parity surface | Preserve the incumbent MCP contract over lee-kb's governed retrieval | 🟢 Delivered; KB-R2 benchmark and KB-R3 registration/cutover remain open |
 
 ## Product Risks and Blockers
+
+KB-R2 must benchmark the MCP envelope against the incumbent before any
+registration or cutover decision. The successor-specific `lee-kb` server name,
+configured principal/project, content-hash version stamp, and additive receipt
+fields are documented in `docs/kb-r1-mcp-parity.md`.
 
 | Risk or blocker | Impact | Status | Mitigation |
 |----------------|--------|--------|------------|
@@ -105,6 +112,7 @@ synthetic SQLite projection, not a live corpus.
 | BI-003 Outlook slice uses one delegated folder and shared Graph transport | Proves email identity, normalization, relationships, permissions, freshness, delta, token-safe failure, and checkpoint semantics without hard-coding Graph plumbing into the connector | 2026-08-05 |
 | Microsoft Graph foundation is resource-neutral | Account/token lifecycle, HTTP, retry/throttling, pacing, pagination, delta expiry, and error normalization are shared; OneDrive can reuse them and OneNote is not used to shape them | 2026-08-05 |
 | Sprint 5 uses `Repository.advance_cursor()` for atomic cursor-only advancement | Empty delta rounds need restart-safe cursor persistence without fabricating knowledge items; SQLite implements the capability transactionally, records synchronized-project state atomically, and unsupported providers fail closed | 2026-08-05 |
+| KB-R1 MCP is a thin stdlib adapter over governed `retrieve()` | Preserve the incumbent three-tool wire contract while retaining lee-kb permission filtering, provenance, freshness, receipts, and query audit; do not couple registration or cutover to the library | 2026-08-06 |
 
 ## What “Done” Looks Like
 
@@ -117,5 +125,7 @@ synthetic SQLite projection, not a live corpus.
 - [x] A question can be answered as cited claims with confidence, conflicts, and absences (`answer()` / `lee-kb ask`), covered by seven permanent benchmark families (`tests/answers/`) against a real connector/repository sync. An LLM-backed synthesis provider, a real-corpus measurement of `answer()`, and live filesystem verification of `ask` over time are not yet implemented, so they are not yet part of this coverage.
 - [x] The existing connector boundary is exercised by focused local and Outlook suites; the shared Graph client and transport are tested without external credentials, and the capability matrix records implemented behavior separately from live provider evidence.
 - [ ] One approved real Outlook mailbox can authenticate, initial-sync, incremental-sync, recover from an expired delta token, and answer a known email question with governed provenance. The live-capable path exists; account, consent, and sanitized operator evidence are still required.
+
+- [x] The successor speaks the incumbent MCP tool contract over stdio and attaches governed receipt data without changing incumbent result fields. KB-R2 benchmark and KB-R3 registration/cutover are not yet complete.
 
 *Update this file when a milestone is reached or product direction changes.*

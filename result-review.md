@@ -3,6 +3,48 @@
 > **Running log of completed work.** Newest entries are at the top. Each entry
 > records what changed, why it matters, and how to verify it.
 
+## 2026-08-06 — KB-R1 MCP parity surface delivered
+
+### What Was Built
+
+`src/lee_kb/mcp.py` now implements the incumbent `kb-index` MCP contract as
+stdlib JSON-RPC 2.0 over newline-delimited stdio. The exact three tools are
+preserved: `kb_search`, `kb_status`, and `kb_compile_preview`. Search and
+preview call governed `retrieve()` over the configured SQLite projection, so
+permission filtering, citations, freshness, per-evidence receipts, and query
+audit events remain active. Incumbent result fields are retained and receipt,
+ID, timestamp, denial, truncation, and freshness details are additive.
+
+The `lee-kb-mcp` console entrypoint and `python3 -m lee_kb.mcp` launch path use
+the existing `LEE_KB_CONFIG`/SQLite configuration convention. `tests/test_mcp.py`
+drives the real server over stdio against a synchronized fixture and checks the
+tool schema, handshake, status, search response, receipt persistence, preview,
+and invalid-parameter behavior.
+
+### Why It Matters
+
+Employee Zero consumers can target the successor's server process without
+learning a new tool vocabulary or losing the incumbent response keys. The
+successor-specific semantics are explicit rather than hidden: the `commit`
+field carries a source content hash, the configured owner is the retrieval
+principal, status diagnoses SQLite projection/root drift, and receipt data is
+new additive output. Registration and cutover remain KB-R3 work.
+
+### How to Verify
+
+- `pytest` — **374 passed**.
+- `python3 -m ruff check src tests tools` — clean; existing top-level-settings
+  deprecation warning only.
+- `python3 -m compileall -q src tests tools` — clean.
+- `python3 tools/check_disclosure.py` — clean.
+- `git diff --check` — clean.
+- Black per-file checks over all 47 Python files — clean. The prescribed
+  multi-file Black command reported all files unchanged but did not terminate
+  under the installed Black 26.1.0 build; no Black formatting difference was
+  found in the bounded per-file checks.
+- No `.mcp.json`, registration, cutover, `kb-index` file, commit, push, or
+  production operation was performed.
+
 ## 2026-08-05 - Project review and next-step recommendation
 
 ### What Was Reviewed

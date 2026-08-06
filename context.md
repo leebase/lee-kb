@@ -7,9 +7,9 @@
 
 | Attribute | Value |
 |-----------|-------|
-| **Phase** | Personal-first Second Brain foundation complete; Microsoft Graph foundation and live-capable Outlook path delivered; real mailbox proof pending |
+| **Phase** | Personal-first Second Brain foundation complete; Microsoft Graph foundation and live-capable Outlook path delivered; KB-R1 MCP parity surface delivered; real mailbox proof and MCP cutover remain pending |
 | **Mode** | 2 (Collaborative implementation with approval) |
-| **Last Updated** | 2026-08-05 |
+| **Last Updated** | 2026-08-06 |
 
 ### Sprint Status
 
@@ -20,10 +20,18 @@
 | Sprint 3 — Governed `answer()` Surface | 🟢 Delivered, review repairs complete for the scoped slice | Contracts, evidence selection, absence/conflict identification, `answer()` assembly, the `lee-kb ask` CLI, permanent regression fixtures for 37 benchmark items across seven families, and S3-R-04/S3-R-05 repairs are complete and verified; S3-R-07/S3-R-09 remain advisory documentation findings; the LLM-backed synthesis provider and live filesystem verification of `ask` are explicit deferrals, not gaps |
 | Sprint 4 — Personal Connector Foundation | 🟢 Bounded slice delivered; conditional offline review pass | BI-001 conformance coverage, capability matrix, and hardened offline BI-003 Outlook adapter are implemented |
 | Sprint 5 — Microsoft Graph Foundation and Live Outlook Proof | 🟡 Shared foundation delivered; real account operator-gated | One real approved mailbox/folder remains to prove authentication, initial/incremental sync, expired-delta recovery, restart-safe no-change cursors, and governed email answers without enterprise scope |
+| Sprint KB-R1 — MCP parity surface | 🟢 Delivered | Stdlib stdio JSON-RPC surface preserves `kb_search`, `kb_status`, and `kb_compile_preview`; governed receipts are additive; registration/cutover remain KB-R3 scope |
 
 ## What's Happening Now
 
 ### Current Work Stream
+
+KB-R1 is now delivered as a successor-side MCP adapter. `src/lee_kb/mcp.py`
+speaks the incumbent's 2025-06-18 JSON-RPC-over-stdio contract, preserves the
+three incumbent tool names and required result fields, and routes search and
+preview through governed `retrieve()` so SQLite receipts and query audit events
+remain in force. No `.mcp.json`, registration, cutover, or `kb-index` change was
+made. KB-R2 must benchmark the two surfaces before KB-R3 changes deployment.
 
 Sprint 1 delivered one governed retrieval path: local documents on disk
 synchronize into a normalized SQLite projection and are searchable through
@@ -89,6 +97,12 @@ OneDrive is a readiness assessment only. OneNote remains explicitly
 unimplemented and is not shaping the Graph layer.
 
 ### Recently Completed
+
+- ✅ KB-R1 MCP parity surface: `python3 -m lee_kb.mcp` and `lee-kb-mcp` expose
+  the incumbent's exact three-tool schema and compatible response envelope;
+  search/preview add citations, freshness, and persisted receipt data without
+  changing incumbent fields. Six subprocess contract tests and the full suite
+  pass; registration and cutover remain deliberately untouched.
 
 - ✅ Microsoft Graph follow-up hardening: verified subject/tenant identity is
   retained with tokens and rechecked after refresh, Graph-backed Outlook scopes
@@ -335,6 +349,11 @@ unimplemented and is not shaping the Graph layer.
   disposable folder, initial/incremental sync, expired-delta recovery,
   restart-safe no-change cursor advancement, and governed email provenance;
   enterprise features and live auth remain approval gates.
+- ✅ KB-R1 parity decision recorded 2026-08-06: the MCP adapter uses stdlib
+  JSON-RPC and the existing `LEE_KB_CONFIG`/SQLite conventions; incumbent
+  `commit` is mapped to the lee-kb source content hash and receipt data is
+  additive. The server name is successor-specific (`lee-kb`), and KB-R2 owns
+  acceptance of the documented status/project/principal semantics.
 - ✅ Derived artifacts, ranking signals, retrieval surfaces, and projects added to `architecture.md` and `product-definition.md`.
 - ✅ v1 reframed as a reimplementation of the Employee Zero knowledge system (~1,200 documents, 15 source roots) with the parity acceptance criterion: the Chief of Staff switches off the old `kb` commands without losing capability.
 - ✅ Identity consumed from the Agent Board model; principal required on every retrieval; fail-closed.
@@ -357,7 +376,7 @@ unimplemented and is not shaping the Graph layer.
 | Deletion = tombstone by default, purge as optional policy | Receipts stay resolvable; clients configure governance-driven purge later | 2026-08-03 |
 | Stored schema version + migration framework; additive migrations are used when possible and wipe-and-resync remains the fallback | The projection is disposable; sources are authoritative | 2026-08-03 |
 | retrieve() contract: query, principal, top_k, filters, freshness, project | Filters are simple equality/range on connector, project, date, type, tags — no query language | 2026-08-03 |
-| Library is the product; CLI is the v1 surface; MCP server is Phase 2 | All surfaces exercise the same public retrieval API | 2026-08-03 |
+| Library is the product; CLI is the v1 surface; MCP is a thin KB-R1 surface over the same governed retrieval API | Consumers can retain the incumbent tool contract while permission, provenance, freshness, and receipt guarantees remain in the library; registration/cutover stay deployment work | 2026-08-06 |
 | Sync is user-driven (`lee-kb sync [...]`); daemons and watchers deferred | Freshness reporting makes staleness visible instead | 2026-08-03 |
 | Configuration is a public contract at `~/.config/lee-kb/config.toml` | Client deployments will depend on it; documented from day one | 2026-08-03 |
 | Golden evaluation corpus (~20 real questions) is a Sprint 1 deliverable | Semantic retrieval must measurably beat the lexical baseline before adoption | 2026-08-03 |
@@ -395,6 +414,7 @@ unimplemented and is not shaping the Graph layer.
 | `docs/connector-capability-matrix.md` | BI-001 provider evidence plus BI-003 capability and live-integration questions | ✅ Available |
 | `docs/outlook-connector.md` | BI-003 bounded offline design and verification contract | ✅ Available |
 | `evidence/real-corpus-parity-report.md` | Measured findings from syncing/querying the real deployed Employee Zero corpus | ✅ Available |
+| `docs/kb-r1-mcp-parity.md` | Incumbent-compatible MCP surface, launch contract, boundaries, and KB-R2 handoff | ✅ Available |
 
 ### Session memory
 
@@ -449,11 +469,12 @@ S1-R-17 remain advisory. See
 | Rank | Action | Owner | Done When |
 |------|--------|-------|-----------|
 | 1 | Approve and execute the Sprint 5 live Outlook proof | Human + Planner + Builder | Public client/account/folder consent is approved; initial/incremental sync, atomic no-op cursors, expired-delta recovery, governed email answers, and sanitized live evidence pass review |
-| 2 | Decide whether the OR-matcher's ~1.5s common-token retrieval worst case needs a page-size cap or early exit at the expanded corpus scale | Human + Builder | Decision recorded and, if needed, implemented and re-measured |
-| 3 | Curate the real golden benchmark from Lee's recurring Chief of Staff questions and run it through both `retrieve()` and `answer()` | Human + Builder | `docs/golden-baseline.md` and `docs/answer-benchmark-results.md` report results against the curated corpus |
-| 4 | Approve the OpenAI client/model/route and implement the source-bounded `SynthesisProvider` package | Human approval + Builder | `docs/openai-synthesis-decision.md` approved; exact dependency/model/route recorded; provider reviewed without weakening deterministic offline behavior |
-| 5 | File the Agent-Orch defect: continuation runs record `launch: null`, making crashed continuations unresumable | Human + Platform | Backlog item exists in agent-orch with the OS1-contract reference |
-| 6 | Resolve Open Question 1 (Employee Zero parity scope for live mission status and dossier validation) | Human + Planner | Parity scope decision recorded in `architecture.md` or `product-definition.md` |
+| 2 | Run KB-R2 MCP parity benchmark before cutover | Human + Builder | Incumbent and successor are compared on the same fixture/corpus for latency, status, citations, denial behavior, preview, and receipt/audit accounting; semantic differences are accepted or repaired |
+| 3 | Decide whether the OR-matcher's ~1.5s common-token retrieval worst case needs a page-size cap or early exit at the expanded corpus scale | Human + Builder | Decision recorded and, if needed, implemented and re-measured |
+| 4 | Curate the real golden benchmark from Lee's recurring Chief of Staff questions and run it through both `retrieve()` and `answer()` | Human + Builder | `docs/golden-baseline.md` and `docs/answer-benchmark-results.md` report results against the curated corpus |
+| 5 | Approve the OpenAI client/model/route and implement the source-bounded `SynthesisProvider` package | Human approval + Builder | `docs/openai-synthesis-decision.md` approved; exact dependency/model/route recorded; provider reviewed without weakening deterministic offline behavior |
+| 6 | File the Agent-Orch defect: continuation runs record `launch: null`, making crashed continuations unresumable | Human + Platform | Backlog item exists in agent-orch with the OS1-contract reference |
+| 7 | Resolve Open Question 1 (Employee Zero parity scope for live mission status and dossier validation) | Human + Planner | Parity scope decision recorded in `architecture.md` or `product-definition.md` |
 
 Also open, advisory (not ranked — lower severity): S2-R-05 through S2-R-11 in
 `code-reviews/review-sprint-2-p1-real-corpus.md` (docstring/partition-accuracy
