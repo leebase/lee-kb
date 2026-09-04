@@ -218,6 +218,18 @@ Ranked lists are fused with reciprocal rank fusion, so consensus across retrieve
 The Evidence Bundle carries per-retriever ranks from day one, even when only lexical retrieval is implemented. Fusion can then be added without schema changes.
 
 After ranking is final, context expansion pulls in neighboring chunks so evidence arrives complete, not as lonely fragments.
+### Lexical candidate exhaustion
+
+The lexical provider currently fetches candidates to exhaustion before applying
+metadata filters, permission evaluation, and final recency/stable-ID ordering.
+The 2026-08-09 current-projection stress measurement was 1.7365 seconds mean
+for a deliberately degenerate single-common-word query at 1,314 live items and
+20,438 chunks; distinguishing queries remained below 0.42 seconds. This is
+accepted for the personal release. A page cap or early exit is deferred until
+a larger-scale baseline proves the cost is user-visible, because capping before
+governed filtering could hide a deeper permitted result behind denied or
+filtered candidates and would alter audit counts.
+
 
 ---
 
@@ -262,9 +274,18 @@ Supported metadata filters in v1: connector, project, date range, document type,
 
 ## answer()
 
-Layers query planning and synthesis on top of retrieve().
+Layers query planning and deterministic claim assembly on top of `retrieve()`,
+then optionally narrates finalized claims through a replaceable
+`SynthesisProvider`.
 
-Produces an answer with citations, caveats, and cross-source synthesis.
+Produces an answer with claims, citations, confidence, freshness, caveats, and
+cross-source synthesis. The source-bounded Responses provider receives no
+repository, raw evidence, permission facts, or source locators; an injected
+client owns its model, route, and credential boundary.
+
+Provider failure is fail-closed: the answer is `UNKNOWN`, receipt accounting
+and the retrieval freshness report remain attached, and no provider fallback
+is attempted.
 
 This is the surface for humans who want an answer, not evidence rows.
 
@@ -486,6 +507,85 @@ For a future shared deployment, a project can be the natural knowledge-domain
 boundary: one project's sources are scoped together without changing the
 retrieval API. Strong tenant isolation remains a later decision, not a personal
 release requirement.
+
+## Authenticated Multi-Client Knowledge Boundary
+
+LeeOS integration uses the additive `lee_kb.access` seam when more than one
+client or employee must reach the projection.  It does not change the
+personal CLI/MCP default or turn lee-kb into an identity provider.
+
+- `AccessRegistry` maps a provisioned client credential to one server-owned
+  employee principal and issues an opaque, short-lived in-memory session.
+  Session claims are never trusted from the transport; each request
+  re-resolves the client, employee identity, current policy, and revocation
+  state.
+- `KnowledgePolicy` is immutable for a request generation.  Each grant is
+  bound to principal, tenant, lane, scope, purpose, project, source namespace,
+  root/path or explicit item IDs, operations, classification, and validity
+  interval.  A project name alone is never an authorization grant.
+- `AuthenticatedKnowledgeGateway` evaluates those grants and the item's
+  existing `PermissionSet` before calling `governance.retrieve()`.  Released
+  evidence therefore retains the existing principal, citation, freshness, and
+  receipt contract; the gateway adds client/session/grant provenance.
+- Registration state persists only salted PBKDF2 verifier material and
+  revocation metadata.  Secrets and live sessions are not persisted.  A
+  repository-backed access-audit sink is required for the authenticated
+  gateway; query text is represented by a digest, never by an access audit
+  row.
+- Credential/session lifecycle and denied authorization decisions are
+  non-content audit events.  Revoking a client removes its live sessions;
+  policy replacement revalidates the immutable session context and grants on
+  the next request.
+
+This is an employee/client authorization seam, not tenant administration,
+source-provider authentication, delegation, execution authority, or a second
+knowledge store.  Transport adapters (JWT, MCP, Graph, browser, or local
+process) must authenticate in their own boundary and then call this seam;
+none may fabricate a `Principal`, select another project, or bypass the
+gateway for direct repository access.
+
+There is no v1 confused-deputy or delegated-authority token.  A client
+credential maps to exactly one principal; request payloads cannot name an
+alternate employee, delegator, tenant, lane, scope, or purpose.  Employee Zero,
+Jarvis, Codex, and future voice clients therefore use separately provisioned
+client identities and receive only the grants assigned to those identities.
+Knowledge evidence never authorizes an owner action or transfers authority to
+the caller.  A future A-delegates-to-B flow requires a separately versioned
+grant carrying both actors, exact source/capability bounds, purpose, expiry,
+and revocation; it is not represented by copying a session ticket.
+
+Delivered runtime surfaces (2026-08-13):
+
+- **MCP employee mode.** `lee-kb-mcp` launched with `LEE_KB_CLIENT_ID` plus
+  `LEE_KB_CLIENT_SECRET`/`LEE_KB_CLIENT_SECRET_FILE` routes every governed
+  tool call through the authenticated gateway.  Policy and credential files
+  are re-read on each call, so operator revocations reach live server
+  processes; authentication-class failures share one non-enumerating
+  message, and `kb_status` exposes only granted roots and a granted-subset
+  aggregate state.  Without the client env the server keeps the incumbent
+  single-owner contract unchanged.
+- **Provisioning CLI.** `lee-kb access employee|client|grant|audit`
+  operates on owner-only `access-policy.json`/`access-clients.json` beside
+  the config; grant context is copied from the employee record
+  server-side, never from flags.  `SourceGrant` supports the explicit `*`
+  whole-root sentinel; no other wildcard exists.
+- **Source-owner ACLs.** Local roots accept `allowed_principals`
+  (mirroring the Outlook/Calendar scopes); grants and item ACLs are both
+  required, so an access grant can never override a source owner's
+  declaration, and no employee inherits the configured owner's authority.
+- **Bearer hygiene.** Session ids never leave the registry; audit rows,
+  receipts, and wire payloads carry one-way `session_reference` digests,
+  and new projection files are created owner-only (0600).
+- **Owner-gateway mode (S1C).** A `[owner_gateway]` config section
+  activates the LeeOS owner contract on the same MCP transport: versioned
+  hash-verified identity mapping (`lee` → `lee@leebase.com`), an owner
+  version handshake in `initialize`, mapped-permission current retrieval,
+  and exact `(repository, commit, path)` history released only when the
+  mapped current permission AND a versioned historical-release manifest
+  rule both cover the request, dereferenced through a bounded allowlisted
+  git-plumbing resolver.  Every withheld basis returns one
+  non-enumerating `UNKNOWN` shape.  Employee env and owner-gateway config
+  in one process is a configuration error.
 
 ---
 

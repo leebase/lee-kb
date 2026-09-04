@@ -45,6 +45,7 @@ from .contracts import (
     Authority,
     ChunkId,
     Citation,
+    FreshnessReport,
     KnowledgeItemId,
     Principal,
     RetrievalReceipt,
@@ -147,6 +148,7 @@ class OmissionReason(str, Enum):
     STALE = "stale"
     LOWER_AUTHORITY = "lower_authority"
     BUDGET = "budget"
+    SYNTHESIS_FAILURE = "synthesis_failure"
 
 
 class Side(str, Enum):
@@ -450,6 +452,7 @@ class Answer:
     question: str
     principal: Principal
     project: str
+    freshness: FreshnessReport | None
     claims: tuple[Claim, ...]
     confidence: Confidence
     receipt_ids: tuple[ReceiptId, ...]
@@ -468,6 +471,10 @@ class Answer:
         if not isinstance(self.principal, Principal):
             raise TypeError("principal must be a Principal")
         _require_project(self.project)
+        if self.freshness is not None and not isinstance(
+            self.freshness, FreshnessReport
+        ):
+            raise TypeError("freshness must be a FreshnessReport or None")
         _require_tuple(self.claims, "claims")
         _require_tuple(self.receipt_ids, "receipt_ids")
         _require_tuple(self.evidence_used, "evidence_used")

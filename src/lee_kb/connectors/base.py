@@ -43,6 +43,8 @@ from ..contracts import (
     Authority,
     ChangeType,
     DocumentType,
+    MemoryConfidence,
+    MemoryType,
     PermissionSet,
     SourceLocator,
     Trust,
@@ -237,6 +239,15 @@ class FetchedDocument:
     title: str | None = None
     authority: Authority = Authority.DERIVED
     trust: Trust = Trust.CURATED
+    #: Memory semantics a connector may populate from source-native
+    #: metadata (e.g. local_files frontmatter). Mirrors KnowledgeItem's
+    #: same fields; main.py's sync loop copies these across unchanged.
+    memory_type: MemoryType | None = None
+    subject_principal: str | None = None
+    memory_confidence: MemoryConfidence | None = None
+    importance: float | None = None
+    memory_formed_at: datetime | None = None
+    superseded_by: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.source_object_id, "source_object_id")
@@ -254,6 +265,23 @@ class FetchedDocument:
             raise TypeError("authority must be an Authority")
         if not isinstance(self.trust, Trust):
             raise TypeError("trust must be a Trust")
+        if self.memory_type is not None and not isinstance(self.memory_type, MemoryType):
+            raise TypeError("memory_type must be a MemoryType")
+        _require_optional_text(self.subject_principal, "subject_principal")
+        if self.memory_confidence is not None and not isinstance(
+            self.memory_confidence, MemoryConfidence
+        ):
+            raise TypeError("memory_confidence must be a MemoryConfidence")
+        if self.importance is not None:
+            if isinstance(self.importance, bool) or not isinstance(
+                self.importance, (int, float)
+            ):
+                raise TypeError("importance must be a number")
+            if not (0.0 <= float(self.importance) <= 1.0):
+                raise ValueError("importance must be between 0.0 and 1.0")
+        if self.memory_formed_at is not None:
+            _require_aware(self.memory_formed_at, "memory_formed_at")
+        _require_optional_text(self.superseded_by, "superseded_by")
 
 
 @dataclass(frozen=True, slots=True)

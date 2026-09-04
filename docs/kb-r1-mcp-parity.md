@@ -63,15 +63,34 @@ projection separately with `lee-kb sync` before starting a session.
 - Live mission status, dossier validation, and other consumer-side session
   steps remain outside the knowledge retrieval server.
 
-## KB-R2 handoff
+## KB-R2 result (2026-08-08, revised same day after a perf fix)
 
-Benchmark both servers against the same small fixture and the approved
-Employee Zero corpus before cutover. The benchmark should compare tool-call
-latency, fresh/stale status behavior, top-k citation identity, authority/trust
-ordering, empty and denied queries, preview text, and receipt/audit accounting.
-It should also record the intentional semantic differences: `lee-kb` is
-permission-aware and requires a configured principal, its `commit` is a
-content hash rather than a git stamp, and its status describes the SQLite
-projection plus local-root cursor drift. KB-R2 should decide whether those
-differences are acceptable for the session protocol and define the sanitized
-evidence needed before KB-R3 registration.
+Benchmarked against `kb-index` on the real `ai-employee-factory/knowledge/sources.toml`
+corpus over live stdio JSON-RPC. Full method, numbers, root-cause diagnosis,
+and post-fix re-measurement: `evidence/kb-r2-mcp-benchmark-report.md`.
+
+**Go.** Functional/data parity holds — same corpus, comparable doc/chunk
+counts, relevant provenance-complete results, additive receipts as designed.
+The first pass found `kb_status` (and therefore every `kb_search` call,
+which runs the same preflight) costing 148s against the real corpus versus
+kb-index's 5.5s — a 27× regression. `cProfile` traced it to
+`LocalFilesConnector.discover_report()`'s `os.walk` never pruning denied
+directories before descending into them (one root's `.agent-orch-scratch/`
+alone contributed 1.16M unnecessarily-walked files, despite already being in
+`GLOBAL_DEFAULT_DENY`) — `kb-index` avoids this because its own walk already
+prunes `dirnames` in place. Fixed same day by porting that same pruning
+(`_dir_denied()`) plus a secondary fix to `_claiming_root()`'s nested-root
+resolution (cached string-prefix comparison instead of repeated `pathlib`
+containment checks). Full 374-test suite passes unchanged. Re-measured live
+against the same real corpus: lee-kb now costs 3.9–4.2s per call across
+`kb_status`/`kb_search`/`kb_compile_preview`, consistently **faster** than
+kb-index's 5.5–5.6s.
+
+KB-R3 (registration/cutover) remains separate, intentionally-undone
+deployment work: `.mcp.json` was not touched by this benchmark.
+
+Separately, kb-index's build-time `validate_faq_pointers` gate (every FAQ
+`Source:` pointer must resolve) had no lee-kb equivalent — a cutover would
+have silently dropped that enforcement. Closed via
+`ai-employee-factory/scripts/faq_lint.py`, a standalone, engine-independent
+reimplementation with no dependency on either KB package staying installed.

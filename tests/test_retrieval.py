@@ -7,6 +7,7 @@ import pytest
 from lee_kb.chunking import chunk_document, chunk_markdown, chunk_plain_text
 from lee_kb.contracts import (
     DEFAULT_PROJECT,
+    Authority,
     DocumentType,
     KnowledgeItem,
     KnowledgeItemId,
@@ -36,6 +37,7 @@ def sync_markdown(
     text: str,
     *,
     source_timestamp: datetime = SOURCE_TIME,
+    authority: Authority = Authority.DERIVED,
 ) -> KnowledgeItem:
     item_id = KnowledgeItemId("local_files", source_object_id)
     item = KnowledgeItem(
@@ -52,6 +54,7 @@ def sync_markdown(
         sync_timestamp=SYNC_TIME,
         permissions=PermissionSet(owner="lee"),
         title=source_object_id,
+        authority=authority,
     )
     chunks = chunk_document(
         text,
@@ -125,6 +128,83 @@ def test_bm25_ranking_is_repeatable_and_breaks_ties_by_recency_then_id(
         "z-new.md",
         "z-old.md",
     ]
+
+
+def test_named_root_preference_normalizes_case_and_hyphens(repository) -> None:
+    for source_object_id in (
+        "DataForge:status.md",
+        "Agent-Orch:status.md",
+        "DashForge:status.md",
+    ):
+        sync_markdown(repository, source_object_id, "deployment status")
+
+    dataforge = retrieve_as_lee(repository, "DATAFORGE deployment").evidence
+    assert dataforge[0].citation.source_locator.label == "DataForge:status.md"
+
+    agent_orch = retrieve_as_lee(repository, "agent-orch deployment").evidence
+    assert agent_orch[0].citation.source_locator.label == "Agent-Orch:status.md"
+
+
+def test_named_root_prefers_canonical_before_derived(repository) -> None:
+    sync_markdown(
+        repository,
+        "DataForge:a-derived.md",
+        "current deployment status",
+        authority=Authority.DERIVED,
+    )
+    sync_markdown(
+        repository,
+        "DataForge:z-canonical.md",
+        "current deployment status",
+        authority=Authority.CANONICAL,
+    )
+
+    evidence = retrieve_as_lee(repository, "dataforge deployment status").evidence
+
+    assert evidence[0].citation.source_locator.label == "DataForge:z-canonical.md"
+    assert evidence[1].citation.source_locator.label == "DataForge:a-derived.md"
+
+
+def test_generic_query_preserves_existing_recency_order_across_roots(
+    repository,
+) -> None:
+    sync_markdown(
+        repository,
+        "DataForge:canonical.md",
+        "deployment status",
+        authority=Authority.CANONICAL,
+    )
+    sync_markdown(
+        repository,
+        "DashForge:current.md",
+        "deployment status",
+        source_timestamp=datetime(2026, 8, 2, 9, 0, tzinfo=timezone.utc),
+    )
+
+    evidence = retrieve_as_lee(repository, "deployment status").evidence
+
+    assert evidence[0].citation.source_locator.label == "DashForge:current.md"
+    assert evidence[1].citation.source_locator.label == "DataForge:canonical.md"
+
+
+def test_root_fragments_do_not_trigger_root_preference(repository) -> None:
+    sync_markdown(
+        repository,
+        "DataForge:canonical.md",
+        "forge deployment status",
+        authority=Authority.CANONICAL,
+    )
+    sync_markdown(
+        repository,
+        "DashForge:current.md",
+        "forge deployment status",
+        source_timestamp=datetime(2026, 8, 2, 9, 0, tzinfo=timezone.utc),
+    )
+
+    evidence = retrieve_as_lee(repository, "forge deployment status").evidence
+
+    assert evidence[0].citation.source_locator.label == "DashForge:current.md"
+    assert evidence[1].citation.source_locator.label == "DataForge:canonical.md"
 
 
 def test_every_evidence_row_has_a_one_based_lexical_rank(repository) -> None:

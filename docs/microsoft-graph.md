@@ -184,6 +184,7 @@ account = "personal"
 folder_id = "<mail-folder-id>"
 folder_name = "Inbox"
 project = "default"
+allowed_principals = ["employee:employee-zero"]
 ```
 
 The operator flow is:
@@ -201,6 +202,54 @@ scripted HTTP and no real account. A real mailbox proof still requires the
 operator to register/approve the public client, consent to `Mail.Read` and
 `User.Read`, use an
 OS secret service, and record sanitized synchronization evidence only.
+
+## Read-Only Calendar Configuration
+
+Calendar ingestion uses a separate Graph account binding with exactly
+`Calendars.Read` and `User.Read`; `Mail.Read`, write scopes, and send scopes are
+refused. The account binding therefore has its own token-store key even when it
+resolves to the same Microsoft user:
+
+```toml
+[microsoft_graph.accounts.chief_of_staff_calendar]
+user_id = "lee@example.com"
+scopes = ["Calendars.Read", "User.Read"]
+
+[calendar.chief_of_staff]
+account = "chief_of_staff_calendar"
+calendar_id = "<calendar-id>"
+calendar_name = "Calendar"
+start = "2026-08-08T00:00:00Z"
+end = "2026-11-06T00:00:00Z"
+project = "default"
+allowed_principals = ["employee:employee-zero"]
+```
+
+The view window is fixed and is part of the connector identity. Each pass
+enumerates that complete bounded view, compares deterministic normalized event
+hashes with the metadata-only cursor, and emits created, updated, and deleted
+events. The connector refuses duplicate IDs, events outside the declared
+calendar/window, non-UTC Graph responses, malformed cursors, and checkpointing
+after an incomplete pass. Event text includes schedule, organizer, attendees,
+location, and body text; online-meeting and join URLs are not indexed.
+
+```bash
+lee-kb auth login --account chief_of_staff_calendar
+lee-kb sync calendar chief_of_staff
+lee-kb search "project review" --principal lee@example.com
+lee-kb auth revoke --account chief_of_staff_calendar
+```
+
+`allowed_principals` is an explicit delegated knowledge grant; it does not
+change the Graph token, mailbox/calendar scope, or owner. Private evidence is
+released to the owner and only the listed stable employee principals. A later
+sync applies a changed grant even when every source object is content-unchanged,
+without re-chunking or exposing content. Other employees remain denied.
+
+Automated coverage uses scripted transports and parser fixtures. A live proof
+requires an operator-approved public client, delegated consent, and an actual
+calendar ID; sanitized evidence must not include event content, tokens, device
+codes, or join URLs.
 
 ## OneDrive Readiness Assessment
 

@@ -171,14 +171,38 @@ Document and chunk totals from this run are identical to the pre-repair baseline
 
 Sync summary counters also carried forward exactly except for two diagnostics: **1,213 created, 0 updated, 0 deleted, 0 unchanged** matched the baseline, but `git-ignored` dropped from 300 to **14** and `git-ignore status unresolved` stayed at **5**. See Parity Gaps for the explanation.
 
-Retrieval (`lee-kb search`, wall-clock per query, real corpus already synced) — not re-measured this run (out of this step's scope, and document/chunk counts are unchanged so no retrieval-affecting shift is expected); figures below are carried forward unchanged from the pre-repair measurement:
+Retrieval (`lee-kb search`, wall-clock per query, real corpus already synced) — the
+historical pre-Office measurement below remains the clean 1,213-document /
+12,699-chunk baseline:
 
 | Query type | Count | Latency range | Mean |
 |---|---:|---|---:|
 | Category queries (2 per golden category) | 10 | 0.286s – 0.766s | 0.443s |
 | Common-word stress queries | 2 | 0.465s – 1.521s | 0.993s |
 
-The single-common-word query ("the") was the slowest of all 12 at **1.521s**, roughly 3.4x the category-query mean — the visible worst case of OR-matcher fetch-to-exhaustion on the prior corpus size. Retrieval latency was not re-measured after Office expansion; that remains an open decision.
+The single-common-word query ("the") was the slowest of all 12 at **1.521s**.
+That measurement used the pre-Office projection and is retained for lineage,
+not as the current-scale decision gate.
+
+### Post-commissioning OR-matcher stress measurement — 2026-08-09
+
+A read-only stress run against the current local projection measured **1,314
+live items and 20,438 chunks**. Three fresh repository instances ran the
+single-common-word query ("the") through `LexicalRetriever`: **1.7220s,
+1.7617s, and 1.7257s** (mean **1.7365s**, maximum **1.7617s**). The query
+returned 9,405 candidate hits and exhausted ten doubling pages
+(32 through 16,384). Distinguishing queries remained below half a second:
+"what is the status of the project" averaged **0.4154s**, "status project"
+averaged **0.4172s**, and "architecture" averaged **0.0961s**.
+
+**Decision: accept the fetch-to-exhaustion behavior for the personal
+projection.** The measured worst case is a deliberately degenerate common-word
+query, while ordinary distinguishing queries remain sub-second. A cap or
+early-exit heuristic would trade away the current exhaustive-candidate
+contract: metadata filters and permission evaluation happen after provider
+retrieval, and a deep permitted result could be hidden behind denied or
+filtered candidates. Revisit at the planned larger-scale baseline rather than
+silently changing ranking or audit semantics now.
 
 ## Parity Gaps
 
@@ -187,14 +211,29 @@ The single-common-word query ("the") was the slowest of all 12 at **1.521s**, ro
 - Five Office candidates failed closed as unsupported package content, with zero malformed, unreadable, or temporary-access failures; no token-shaped-secret hits were indexed.
 - The Office gap is closed for the intended scope: all 39 live Office files are indexed or explicitly classified in the deduplicated accounting table. Narrow include changes, generated-file exclusions, Git-ignore handling, and the deliberate `ai-employee-book` scope are all visible.
 - git-ignored (**16** full-corpus candidates) and git-ignore-unresolved (**6**) are both accounted for and non-blocking; unresolved candidates are still indexed, matching the connector's "count it, don't drop it" contract. The Office table deduplicates physical files, while the sync diagnostics retain root-level candidate counts.
-- OR-matcher fetch-to-exhaustion remains measured at ~1.5s on the prior corpus; the expanded Office projection has not yet had the stress query set re-measured.
+- OR-matcher fetch-to-exhaustion is now re-measured at current scale: the
+  single-common-word mean was 1.7365s across 1,314 live items / 20,438 chunks.
+  The personal-release decision accepts the behavior; revisit at larger scale.
 - Post-repair re-measurement (this run, database deleted first for a clean full sync): the S2-R-04 nested-root repair found two real overlaps in the deployed config — `jobsearch`/`agent-in-a-box` and `pr-business`/`pr-research` (confirmed via the connector's own health check, which reports root names only, no paths) — and now has the deepest matching root claim each overlapping file. This changed the sync's `git-ignored` diagnostic counter from 300 to 14 (`git-ignore status unresolved` stayed at 5), because pre-repair, both roots in each overlapping pair independently discovered and separately counted the same ignored candidates in the shared region. It did **not** change indexed document or chunk counts, per-root or total (see Performance) — the overlap region evidently held no file that both roots' `include` patterns matched outside of already-ignored candidates, so no duplicate knowledge item was ever actually created; the repair corrected an inflated diagnostic count and closed the class of bug (duplicate citable evidence for one file) rather than fixing an already-manifested duplication in this specific corpus.
 - The S2-R-03 single-discovery-pass repair changed measured sync performance, not corpus shape: wall-clock dropped ~46.6% (5:20.37 → 2:51.18) with peak memory unchanged within noise, consistent with eliminating one of two redundant full discovery passes that the pre-repair sync ran per invocation.
 - Preserved validator evidence for this step's lineage (not rerun here): `pytest tests/` passed on two independent runs (exit 0, 11.098397s and 11.557784s), tied to the S2-R-04 nested-root and S2-R-03 single-discovery-pass acceptance criteria; `pytest tests/golden/` passed on one independent run (exit 0, 8.119346s), tied to the S1-R-16 baseline-as-contract acceptance criterion. These establish the repaired code and the golden-corpus contract were healthy going into this real-corpus re-measurement.
 
 ## Recommended Next Actions
 
-1. **Priority 5 (OR-matcher):** the worst-case query (a single ubiquitous token) has a prior real-corpus measurement of ~1.5s. Decide whether that is acceptable as-is or worth a page-size cap / early-exit heuristic at the 1,235-document / 18,601-chunk scale.
-2. **Priority 7 (curate the real golden benchmark):** the two category queries whose top citation was topically adjacent but not canonical (job-search-log and README-map categories) are good raw material — they show a real ranking edge case on Lee's actual corpus, which the generated seed corpus in `docs/golden-baseline.md` cannot exercise.
-3. Treat the final Office rollout sync wall-clock (**3:03.63**) and peak memory (**~118.5 MiB**) as the current full-resync baseline; the prior clean baseline (2:51.18, ~4.36 GiB) is retained for comparison. The lower peak reflects the error-reporting `os.walk` traversal, not a reduced corpus.
-4. The original measurement pass surfaced no correctness defects in the sync itself (zero fetch failures, zero unexpected overrides, all 15 roots reachable). The independent reviews and this slice repaired nested-root claiming, single-pass discovery, required-root health gating, Office parser safety, and deterministic answer-layer reporting; remaining advisories are recorded in the cold review disposition.
+1. **OR-matcher decision — complete:** current personal-projection stress
+   measurement accepts exhaustive candidate retrieval; no cap or early exit is
+   added before a larger-scale baseline.
+2. **Curated benchmark — measured:** `tools/run_curated_benchmark.py` records
+   the first real-corpus `retrieve()`/`answer()` baseline without publishing
+   question text or source locators; see `docs/golden-baseline.md` and
+   `docs/answer-benchmark-results.md`.
+3. Treat the final Office rollout sync wall-clock (**3:03.63**) and peak memory
+   (**~118.5 MiB**) as the current full-resync baseline; the prior clean
+   baseline (2:51.18, ~4.36 GiB) is retained for comparison. The lower peak
+   reflects the error-reporting `os.walk` traversal, not a reduced corpus.
+4. The original measurement pass surfaced no correctness defects in the sync
+   itself (zero fetch failures, zero unexpected overrides, all 15 roots
+   reachable). The independent reviews and this slice repaired nested-root
+   claiming, single-pass discovery, required-root health gating, Office parser
+   safety, and deterministic answer-layer reporting; remaining advisories are
+   recorded in the cold review disposition.

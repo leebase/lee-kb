@@ -84,3 +84,38 @@ than fabricating a citation. The repository also persists a
 candidate count, denial count, release count, truncation, and outcome status.
 This covers empty, fully denied, mixed permitted/denied, stale-refused, and
 provider-failure results without exposing restricted source identity.
+
+
+## Curated operator benchmark — 2026-08-09
+
+The curated benchmark now runs through both `retrieve()` and deterministic
+`answer()` without copying its question text or source pointers into this
+public repository. `tools/run_curated_benchmark.py` reads the operator-maintained
+question set at runtime, selects the stable commercial, strategy, product, and
+platform sections, copies the SQLite projection with the SQLite backup API, and
+queries only the copy. Output contains aggregate metrics and opaque case IDs.
+
+The current operator run selected **20** cases against a projection of **1,314
+live items and 20,438 chunks**. Fifteen expected source objects were present in
+the projection; five were outside the configured projection scope and are
+reported as source-missing rather than counted as retrieval hits.
+
+| Surface / metric | Result |
+|---|---:|
+| `retrieve()` expected-source hit at 1 | 2/15 (13.33%) |
+| `retrieve()` expected-source hit at 10 | 6/15 (40.00%) |
+| `answer()` expected-source citation | 6/15 (40.00%) |
+| `answer()` claims assembled | 139 |
+| `answer()` conflicts reported | 103 |
+| Retrieval failures | 0 |
+| Answer failures | 0 |
+| No-evidence control | `NOT_FOUND` |
+| Unauthorized control | `INACCESSIBLE` |
+| Strict-freshness control | `STALE_REFUSED` |
+
+This is the first real-corpus baseline, not a quality pass: the low
+expected-source recall and the five out-of-scope pointers identify the next
+retrieval and source-scope investigations. The generated seed baseline above
+remains the portable regression contract; this operator benchmark is
+intentionally local because publishing real question text or source locators
+would violate the repository disclosure rule.

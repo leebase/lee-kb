@@ -1,16 +1,137 @@
 # Lee Knowledge Base Sprint Plan
 
-> **Sprint 3 — Governed `answer()` Surface** (delivered)
+> **Sprint 7 — Governed Multi-Principal Knowledge Plane & S1C Owner Slice**
+> (delivered 2026-08-13)
+
+## Sprint 7 — Governed Multi-Principal Knowledge Plane & S1C Owner Slice
+
+**Status:** Delivered 2026-08-13
+
+**Goal:** Make lee-kb the governed shared knowledge plane for Lee's AI
+workforce: many employee principals, many authenticated clients, one
+identity-free transport — and satisfy the frozen LeeOS S1C owner contract
+from owner-native capability.
+
+### Scope delivered
+
+- Access library (`src/lee_kb/access.py`) with employees, bounded grants,
+  hash-verified policy, PBKDF2 client credentials, opaque sessions, and the
+  authenticated gateway over unmodified `retrieve()`.
+- `lee-kb access` provisioning CLI and owner-only policy/client state files
+  (`src/lee_kb/access_store.py`).
+- MCP employee mode (`LEE_KB_CLIENT_ID` env contract) with per-call policy
+  and credential re-evaluation, non-enumerating denials, granted-root-only
+  status, and strict tool-argument validation; legacy owner mode unchanged.
+- Local-root `allowed_principals` source ACLs, permission-only sync for
+  content-unchanged local items, AppleDouble `._*` global deny.
+- Hardening: one-way `session_reference` digests everywhere a session id is
+  persisted or emitted; tenant re-check in grant evaluation; new projection
+  files created 0600.
+- S1C owner slice: `[owner_gateway]` config mode, versioned identity
+  mapping and owner handshake, public `retrieve_current`, exact-reference
+  history via versioned historical-release manifest + bounded git
+  resolver, bound receipts, single UNKNOWN denial shape, and the
+  content-free owner acceptance artifact generator
+  (`tools/produce_s1c_owner_evidence.py`).
+
+### Acceptance criteria and evidence
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Principal/client/transport separation with no transport identity | ✅ | `tests/test_access.py`, `tests/test_mcp.py` (forged `principal` arg → `-32602`; no-credential registration grants nothing) |
+| No owner fallback; grants cannot override item ACLs | ✅ | `test_employee_never_inherits_owner_authority`; live mail/calendar negative proof |
+| Employee Zero / Chief of Staff isolation | ✅ | `test_employee_zero_and_chief_of_staff_are_isolated` |
+| Invalid/expired/revoked credentials fail closed, non-enumerating | ✅ | parametrized wire denial tests; live wrong-secret/unknown/revoked proofs |
+| Per-request re-authorization incl. grant change after session | ✅ | `test_grant_revoked_after_session_establishment_denies_next_request`; mid-process policy-rewrite wire test |
+| Audit identifies principal + client without protected content | ✅ | digested queries/sessions in `access_audit_events`; two-client attribution proof |
+| Live Chief-of-Staff commissioning | ✅ | provisioned principal + 5 ops-root grants + 2 clients; real `codex exec` grounded answer citing `leeos:*`; fresh granted roots |
+| S1C owner contract satisfied owner-natively | ✅ | `evidence/s1c/S1C-lee-kb.json` computed `accepted` (22/22 rows, 7/7 mutations detected); `docs/s1c-owner-contract.md` |
+| Full verification | ✅ | 517 pytest; Black/Ruff/compileall/disclosure clean |
+
+### Explicitly out of scope
+
+- Jarvis/Hermes container wiring (credential provisioned; recipe in
+  `docs/access-operations.md`).
+- Any Mail/Calendar grant broadening (both remain `employee:employee-zero`
+  only).
+- LeeOS join/ledger mutation (the owner artifact is delivered to the
+  commissioning boundary; join recomputation stays with the LeeOS
+  controller).
+- Delegation between employees (documented as a future separately versioned
+  grant, not implemented).
+
+Earlier sprint records are preserved below.
+
+> **Sprint 6 — Source-Bounded Synthesis Provider** (core delivered 2026-08-09)
 >
-> Goal: layer a governed, cited *answer* surface (claims, confidence,
-> conflicts, absences) on top of the already-governed `retrieve()`, with no
-> new permission logic and no LLM dependency in this release.
+> Goal: add opt-in natural-language narration over finalized governed claims
+> without allowing a model to search, bypass permission filtering, or alter
+> citations, confidence, freshness, or receipt accounting.
 >
-> Sprint 2 — Real-Corpus Parity & Post-Parity Repairs remains in progress on
-> its own open items (the OR-matcher decision and the curated golden benchmark);
-> its record is preserved below, unchanged, under
-> "Sprint 2". Sprint 1 — Personal Foundation is delivered; its record is
-> preserved below, unchanged, under "Sprint 1 (Delivered)".
+> The live client/model/route and credential boundary remain explicit approval
+> gates. Earlier sprint records are preserved below.
+## 2026-08-11 — Glean research intake (completed; no Sprint 6 scope change)
+
+`research/glean-comparison.md` compares lee-kb with Glean's indexed connectors,
+live tools, Enterprise Graph, and structured-data approach using public primary
+sources. The review created BI-007 through BI-012 under
+`backlog/candidates/`; they are unapproved candidates, not Sprint 6 work.
+
+BI-007 remains a planning-only guardrail before any concrete Snowflake work.
+The operator does not intend to recreate Glean and expects to use Snowflake's
+native semantic and query facilities if structured analytics are needed.
+BI-008 through BI-010 are therefore lower-priority `someday` candidates.
+BI-011 remains a `someday` measurement; BI-012 remains an independent `next`
+permission-conformance candidate. None changes the live-synthesis approval
+gate, authorizes an external connection or write action, or expands the
+personal release into an enterprise control plane.
+
+
+
+## Sprint 6 — Source-Bounded Synthesis Provider
+
+**Status:** Core delivered 2026-08-09; approval worksheet tightened 2026-08-09; live runtime wiring remains blocked
+
+**Goal:** Provide a replaceable, source-bounded `SynthesisProvider` that
+narrates only finalized claims and fails closed when generation is unavailable
+or ungrounded.
+
+### Scope
+
+- Implement `OpenAIResponsesSynthesisProvider` behind an injected
+  OpenAI-compatible `responses.create` client; do not add an SDK, credential
+  loader, default route, or model selection.
+- Preserve ordered claim markers and reject empty, overlong, ungrounded, or
+  malformed provider output.
+- Add `Answer.freshness` so completed retrieval freshness is retained beside
+  claims, confidence, citations, and receipt IDs.
+- Convert provider failures to `UNKNOWN` with explicit
+  `SYNTHESIS_FAILURE` evidence omissions and no fallback.
+- Keep the default `lee-kb ask` path deterministic and offline.
+
+### Acceptance criteria and evidence
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Provider receives finalized claims only | ✅ Complete | `src/lee_kb/synthesis.py` builds a bounded claim request without source locators or permission facts |
+| Ordered citation markers are required | ✅ Complete | `tests/test_synthesis.py` |
+| Provider failure is `UNKNOWN` with receipt/freshness closure | ✅ Complete | `tests/test_answer.py` and `tests/test_cli.py` |
+| No hidden fallback or new runtime dependency | ✅ Complete | Injected client boundary; deterministic default remains unchanged |
+| Live client/model/route/secret policy | ⬜ Approval-gated | `docs/openai-synthesis-decision.md` |
+
+### Explicit follow-ons
+
+- Complete and explicitly approve the live-wiring worksheet in
+  `docs/openai-synthesis-decision.md`: exact client/version, model ID and
+  cost ceiling, route/API project, secret resolution boundary, metadata-only
+  telemetry, bounded retry policy, and named library/CLI opt-in surface.
+- Only after all values are approved, implement the smallest injected live
+  wrapper and exercise it against a controlled approved endpoint. No network
+  call
+  is part of the offline reference suite.
+- Until then, keep `lee-kb ask` deterministic and offline and preserve
+  `UNKNOWN`, freshness, receipt, permission, and ordered-marker invariants.
+
 
 ## Sprint KB-R1 — MCP parity surface (Delivered 2026-08-06)
 
@@ -52,13 +173,62 @@ evidence through governed retrieval and attaching lee-kb receipts additively.
 | Status and preview remain shape-compatible | ✅ Complete | Status and compile-preview tests |
 | Full project verification | ✅ Complete | 374 pytest tests; Ruff, compileall, disclosure, diff, and per-file Black checks clean; the multi-file Black command emitted an all-clean report but did not exit under the installed formatter build |
 
-### KB-R2 handoff
+### KB-R2 — MCP benchmark vs incumbent (Delivered 2026-08-08, result: Go)
 
-Benchmark incumbent and successor tool calls on the same fixture and approved
-Employee Zero corpus. Compare latency, fresh/stale behavior, citations,
-authority/trust ordering, empty/denied results, preview text, and receipt/audit
-accounting before deciding whether the semantic differences documented in
-`docs/kb-r1-mcp-parity.md` are acceptable for KB-R3 cutover.
+Benchmarked both MCP servers live over stdio against the same real
+`ai-employee-factory/knowledge/sources.toml` corpus (15 roots). Full method
+and numbers, including the root-cause diagnosis and post-fix
+re-measurement: `evidence/kb-r2-mcp-benchmark-report.md`; summary in
+`docs/kb-r1-mcp-parity.md`'s "KB-R2 result" section.
+
+First pass found a real 27× regression: `kb_status` (and every `kb_search`
+call, which pays the same preflight) cost 148s against the real corpus
+versus kb-index's 5.5s. Root-caused via `cProfile`:
+`LocalFilesConnector.discover_report()`'s `os.walk` never pruned denied
+directories before descending — it walked all 1.16M files under one root's
+`.agent-orch-scratch/` alone, even though that path was already in
+`GLOBAL_DEFAULT_DENY`. Fixed same day (`_dir_denied()`, ported from
+`kb.cli`, prunes `os.walk`'s `dirnames` in place; `_claiming_root()` also
+switched from pathlib containment checks to cached string prefixes). Full
+374-test suite still passes. Re-measured live against the same real corpus:
+lee-kb now costs 3.9–4.2s per call, **faster than kb-index's 5.5s**.
+
+**Result: Go for KB-R3 scope.** Functional/data parity and performance
+parity are both met. Registration/cutover (actually flipping
+`ai-employee-factory/.mcp.json`) is separate deployment work, not further
+benchmark work, and was intentionally not done in this pass.
+
+Also closed in this pass: `kb.cli`'s build-time `validate_faq_pointers` gate
+had no lee-kb equivalent, so a cutover would have silently dropped FAQ
+integrity enforcement. Fixed via `ai-employee-factory/scripts/faq_lint.py`,
+a standalone reimplementation with no dependency on either KB package.
+
+### KB-R3 — MCP registration/cutover (Delivered 2026-08-08)
+
+Executed on the KB-R2 Go decision. Installed `lee-kb` as an editable package
+(`pip install --break-system-packages -e .`, alongside `kb-index`, which
+stays installed and untouched). Production config at
+`~/.config/lee-kb/config.toml` (a copy of `ai-employee-factory`'s live
+`knowledge/sources.toml`, all 15 roots unchanged, plus `owner` and
+`workspace_root`) synced to the default `~/.config/lee-kb/knowledge.sqlite`
+projection (`lee-kb sync`: 28.8s, 1,249 items).
+
+`ai-employee-factory/.mcp.json` now registers `lee-kb` (`lee-kb-mcp`
+console entrypoint, `LEE_KB_CONFIG` pointed at the production config) in
+place of `employee-zero-kb` (`python3 -m kb.mcp`). Smoke-tested with the
+exact production launch command: `initialize`, `tools/list`, a real
+`kb_search`, `kb_status`, `kb_compile_preview`, an empty-string query
+(correctly zero results with staleness detail), and a missing-required-field
+call (correctly JSON-RPC `-32602`) — all passed, all 3.9–4.4s.
+
+Rollback is instant and requires no code change: `.mcp.json.kb-index-backup`
+or `git checkout -- .mcp.json` against pre-cutover commit `76d916f` in
+`ai-employee-factory`. `kb-index` and its `.kb/` index were not modified.
+
+Not in scope: the `employee-zero-resident` scheduled mission still runs
+`kb build`/`kb status` via `kb-index` directly, and `CLAUDE.md`'s
+session-start CLI steps still describe `kb-index`. Only the MCP tool
+surface moved. Full record: `ai-employee-factory/decisions.md` 2026-08-08.
 
 ## Sprint 4 — Personal Connector Foundation (Delivered 2026-08-05)
 
@@ -350,7 +520,7 @@ is explicitly not implemented in this sprint.
 
 | Field | Value |
 |-------|-------|
-| **Status** | 🟡 In progress — P1 (real-corpus parity measurement), the Office ingestion slice, and review-surfaced repairs S2-R-04, S2-R-03, and S1-R-16 are delivered and re-verified; the OR-matcher decision and curated golden benchmark remain open |
+| **Status** | 🟢 Delivered 2026-08-09 — P1 parity, Office ingestion, review repairs, the current-scale OR-matcher decision, and the operator-run curated benchmark are complete; the benchmark remains local-only to preserve public-repository disclosure boundaries |
 | **Start** | 2026-08-03 |
 | **Primary owner** | Human + Builder agent |
 
@@ -362,12 +532,19 @@ is explicitly not implemented in this sprint.
 - Independent review of that measurement and the code it exercised (done; `code-reviews/review-sprint-2-p1-real-corpus.md`, verdict: pass).
 - Repair the correctness and performance defects that review surfaced, scoped to what it found — not a general refactor.
 
-#### Out of scope (tracked, not abandoned)
+#### Boundaries and follow-ons
 
-- Office-format (`.docx`/`.xlsx`/`.pptx`) failure/accounting follow-up beyond the delivered deterministic parser slice — unsupported embedded content remains explicitly classified rather than partially extracted; see `docs/office-ingestion.md`.
-- The curated Chief-of-Staff golden benchmark — still does not exist. The generated 20-question corpus in `tests/golden/` proves the evaluation harness only; it is not a substitute.
-- The OR-matcher fetch-to-exhaustion heuristic decision (Open Question 5 in `context.md`).
-- The Outlook/Microsoft 365 email connector.
+- Office-format (`.docx`/`.xlsx`/`.pptx`) failure/accounting behavior remains
+  deliberately fail-closed; unsupported embedded content is classified rather
+  than partially extracted (`docs/office-ingestion.md`).
+- The curated Chief-of-Staff benchmark is delivered as
+  `tools/run_curated_benchmark.py`; question text and source pointers are read
+  from the operator corpus at runtime and are not committed.
+- The OR-matcher fetch-to-exhaustion decision is recorded in
+  `evidence/real-corpus-parity-report.md`: accept for the personal projection;
+  revisit only at a larger-scale baseline.
+- The Outlook/Microsoft 365 connector moved to Sprint 5 and its live read proof
+  is complete; it is not a Sprint 2 follow-on.
 
 ### Sprint 2 tasks
 
@@ -381,6 +558,8 @@ is explicitly not implemented in this sprint.
 | S2-R-03 | Single discovery pass per sync (correctness of the performance story: the pre-repair sync ran full corpus discovery twice) | Builder | ✅ Complete | `_sync_connector` now calls `connector.discover_report()` once and derives its change list from that report's objects, instead of `list_changes()` and `discover_report()` each running a full pass; re-measured on the real corpus: wall-clock 5:20.37 → 2:51.18 (−46.6%), user time −47.8%, peak RSS unchanged within noise (−0.4%); regression coverage in `tests/test_local_connector.py` and `tests/test_cli.py` |
 | S2-R-04 | Nested/overlapping configured roots can double-count one file as two independently citable knowledge items | Builder | ✅ Complete | `LocalFilesConnector` now has one resolved-root claiming rule: the deepest matching resolved root wins an overlapping file, ties broken by root name; `health()` reports detected nested-root pairs; regression tests added in `tests/test_local_connector.py` |
 | S1-R-16 | Golden baseline is enforced by the harness, not only documented | Builder | ✅ Complete | `tests/golden/test_golden_corpus.py::test_recorded_baseline_metrics_are_enforced_by_the_harness` computes hit-at-1/hit-at-10/MRR through the governed `retrieve()` surface and fails (tolerance 0.01, symmetric) if they drift from the recorded gate in `docs/golden-baseline.md` |
+| S2-OR | Current-scale OR-matcher performance decision | Builder | ✅ Complete | Three fresh-repository stress samples record a 1.7365s mean for the common-word worst case at 1,314 live items / 20,438 chunks; exhaustive retrieval is accepted for the personal release |
+| S2-GOLDEN | Curated Chief-of-Staff benchmark | Builder + Human | ✅ Complete (operator-run, local-only) | `tools/run_curated_benchmark.py` runs 20 canonical operator questions through `retrieve()` and `answer()` against a copied projection; aggregate results are recorded without publishing source content |
 | S2-R-05..S2-R-11 | Remaining review advisories: two docstring/partition-accuracy findings, two narrative-count corrections in the evidence report, a traceability gap in one commit message, a stale test-count reference, a `ruff` config deprecation, and two missing regression tests | Builder | ⬜ Open (advisory, not blocking) | See `code-reviews/review-sprint-2-p1-real-corpus.md` Remediation Roadmap ("Fix Soon" / "Fix Later") |
 | — | Drive full verification green and refresh project memory for the repaired state | Builder | ✅ Complete | This step: `pytest` preserved-validator evidence for S2-R-04/S2-R-03/S1-R-16 all exit 0 (see `result-review.md`); `black --check` and `ruff check` over `src tests tools` both run clean after this step's fixes |
 
@@ -389,13 +568,16 @@ is explicitly not implemented in this sprint.
 - `python3 -m pytest tests/` and `python3 -m pytest tests/golden/` — preserved system-validator evidence tied to the S2-R-04, S2-R-03, and S1-R-16 acceptance criteria; all exit 0. Not rerun by this step (validator rerun not permitted); see `result-review.md` for the exact records.
 - `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` and `python3 -m ruff check src tests tools` — run fresh in this step, both clean after repairs (two files needed `black` reformatting and one over-length docstring line needed manual wrapping; no behavioral change).
 
-### Sprint 2 definition of done (not yet reached)
+- `python3 -m pytest tests/test_curated_benchmark.py tests/answers/test_answer_benchmarks.py -q` — 41 passed.
+- Temporary local-corpus CLI smoke — `sync`, repeated `sync`, `search`, and `ask` completed with citations, freshness, and receipt output; the continuously synchronized filesystem `ask` proof remains a ranked follow-on.
+
+### Sprint 2 definition of done
 
 - [x] The Sprint 1 delivery is measured against the real deployed corpus, not only test fixtures.
 - [x] S2-R-04, S2-R-03, and S1-R-16 are repaired and re-verified.
 - [x] Office-format parsing dependencies are approved and the affected roots' `include` patterns are extended; all 39 live files are indexed or explicitly accounted for.
-- [ ] The OR-matcher decision (Open Question 5) is recorded.
-- [ ] The curated golden benchmark exists (real Chief-of-Staff questions against the Employee Zero sources).
+- [x] The OR-matcher decision is recorded from a current-scale stress measurement and accepted for the personal release.
+- [x] The curated golden benchmark exists as a local-only operator runner over real Chief-of-Staff questions, with aggregate retrieve/answer results recorded without source disclosure.
 
 ---
 

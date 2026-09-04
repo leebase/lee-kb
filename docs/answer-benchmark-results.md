@@ -371,28 +371,29 @@ The remaining findings and release boundaries are:
    governed path.
 
 Independently of all three reviews, the same items already carried forward
-from the prior recommendations are still true and still gate real-world use:
+from the prior recommendations are still true and still gate real-world
+use:
 
-4. **The LLM-backed `SynthesisProvider` is specified but not implemented.**
-   `answer()` ships with only `DeterministicSynthesisProvider`, a template
-   renderer with no model call — offline and auditable, but not natural
-   prose. An LLM-backed provider requires explicit dependency approval per
-   `AGENTS.md`'s "Add external runtime dependencies" guardrail.
-5. **`answer()` has not been run against the real corpus.** Every result in
-   this document comes from the synthetic benchmark fixtures; `retrieve()`
-   has a real-corpus baseline (`evidence/real-corpus-parity-report.md`),
-   `answer()` does not. This matters specifically for conflict detection: a
-    real corpus holds far more near-duplicate restatements, elaborations, and
-    negated statements than these fixtures do, so the heuristic's behavior at
-    real-corpus scale remains unmeasured even though both directions are now
-    covered by fixed synthetic rates.
-6. **Live filesystem verification remains a deferred extension.** Nothing
+3. **The source-bounded `SynthesisProvider` core is implemented, but live
+   wiring remains gated.** `OpenAIResponsesSynthesisProvider` accepts only
+   finalized claims through an injected Responses client, preserves ordered
+   citation markers, and fails closed as `UNKNOWN` when its output is absent or
+   ungrounded. The exact client/version, model, route, credential boundary,
+   telemetry, and retry policy still require approval.
+4. **The first real-corpus `answer()` trial is now measured, but is not a
+   quality pass.** The operator-run curated benchmark below uses the copied
+   local projection and reports 139 claims, 103 conflicts, 0 provider
+   failures, and 6/15 expected-source citations. The five missing expected
+   source objects are outside the configured projection scope. This baseline
+   identifies retrieval and conflict-review work without publishing question
+   text, source locators, or claim prose.
+5. **Live filesystem verification remains a deferred extension.** Nothing
    here exercises `answer()` against a live, continuously-synchronized
    filesystem corpus over time.
-7. **Two open items inherited from `retrieve()` remain open**: the
-   OR-matcher worst-case latency decision (Open Question 5 in `context.md`)
-   and permission-basis on receipts (Open Question 2), both of which affect
-   `answer()` since it is a strict layer on top of `retrieve()`.
+6. **One inherited item remains open**: permission-basis on receipts (Open
+   Question 2). The OR-matcher worst-case latency decision is resolved for the
+   current personal projection; the accepted exhaustive-candidate behavior is
+   recorded in `evidence/real-corpus-parity-report.md`.
 
 None of these are an untested confidently-wrong-answer path in the current
 synthetic suite. The correctness defects a reader would notice as a
@@ -403,3 +404,29 @@ The result is still a synthetic regression floor, not a real-corpus release
 claim. What remains is documentation accuracy (S3-R-07, S3-R-09) and scope
 boundaries the mission explicitly requires stating plainly rather than implying
 completion.
+
+## Real-corpus curated trial — 2026-08-09
+
+The operator-run `tools/run_curated_benchmark.py` selected 20 questions from
+the stable sections of the canonical question set and ran both public surfaces
+against a temporary SQLite copy. The run used 1,314 live items and 20,438
+chunks; it never serialized question text, source IDs, evidence, or claim
+prose.
+
+| Metric | Result |
+|---|---:|
+| Expected source objects present | 15/20 |
+| `retrieve()` expected-source hit at 1 | 2/15 (13.33%) |
+| `retrieve()` expected-source hit at 10 | 6/15 (40.00%) |
+| `answer()` expected-source citation | 6/15 (40.00%) |
+| Claims assembled | 139 |
+| Conflicts reported | 103 |
+| Retrieval failures | 0 |
+| Answer failures | 0 |
+| No-evidence / unauthorized / strict-stale controls | `NOT_FOUND` / `INACCESSIBLE` / `STALE_REFUSED` |
+
+The five missing source objects are reported separately from retrieval recall:
+they are outside the configured projection scope, not successful answers. The
+large real-corpus conflict count is a measurement requiring review, not proof
+that every conflict is valid. The synthetic 37-item suite remains the
+correctness regression gate; this trial is the first scale-and-corpus baseline.

@@ -20,9 +20,9 @@ searchable through lexical retrieval, with permission filtering, citations,
 freshness reporting, and retrieval receipts on every result. Office formats
 now use the same governed path. Sprint 3 adds a
 second, higher-level surface on top of that same retrieval path: `lee-kb ask`
-returns a governed, cited *answer* — assembled claims, confidence,
-conflicts, and absences — instead of raw evidence rows. See
-`docs/answer-architecture.md` for the design and
+returns a governed, cited *answer* — assembled claims, confidence, freshness,
+conflicts, absences, and receipt accounting — instead of raw evidence rows.
+See `docs/answer-architecture.md` for the design and
 `docs/answer-benchmark-results.md` for benchmark results.
 
 Delivered in this release:
@@ -51,30 +51,30 @@ Delivered in this release:
   `docs/golden-baseline.md`)
 - the governed `answer()` surface (`lee-kb ask`): claim assembly, conflict
   identification without a winner, authoritative-absence classification, and
-  deterministic, offline synthesis — no LLM call, no unaccounted-for
-  evidence (see `docs/answer-architecture.md` and
-  `docs/answer-benchmark-results.md`)
+  deterministic offline synthesis by default. An opt-in
+  `OpenAIResponsesSynthesisProvider` accepts only finalized claims through an
+  injected client; provider failures return `UNKNOWN` without fallback, and
+  evidence remains accounted for by citations, freshness, and receipts (see
+  `docs/answer-architecture.md` and `docs/answer-benchmark-results.md`)
 
 Explicitly deferred, not implemented in this release:
 
-- **An LLM-backed synthesis provider for `ask`.** `SynthesisProvider` is a
-  one-method protocol (`docs/answer-architecture.md`, Synthesis Providers)
-  specified for exactly this purpose. `answer()` ships with only
-  `DeterministicSynthesisProvider`, a template renderer with no model call —
-  it is offline and auditable, but not natural prose. An LLM-backed
-  implementation is unimplemented pending explicit runtime-dependency
-  approval.
+- **Live provider wiring for the source-bounded synthesis provider.** The core
+  `OpenAIResponsesSynthesisProvider` is implemented without an SDK, credential
+  loader, or default route. An operator must still approve the exact client
+  version, model, API project, secret boundary, telemetry, and retry policy
+  before a live CLI or production path is configured.
 - **The curated golden benchmark.** `docs/golden-baseline.md` records a
-  20-question corpus generated from this repository's own documents; it
-  proves the evaluation harness, not Lee's real recurring Chief of Staff
-  questions against the Employee Zero sources. That curated corpus is a
-  follow-on task, and it does not yet exist for `ask` either — see
+  20-question corpus generated from this repository's own documents; it proves
+  the evaluation harness, not Lee's real recurring Chief of Staff questions
+  against the Employee Zero sources. That curated corpus is a follow-on task,
+  and it does not yet exist for `ask` either — see
   `docs/answer-benchmark-results.md`.
-- **Live filesystem verification of `ask` over time.** `ask`'s benchmark
-  suite (`tests/answers/`) runs against a temporary, synthetic SQLite
-  projection built for the test; nothing yet exercises `ask` against a live,
-  continuously-synchronized filesystem corpus (freshness drift, resync
-  during use, and so on) — a deferred extension.
+- **Live filesystem verification of `ask` over time.** `ask`'s benchmark suite
+  (`tests/answers/`) runs against a temporary, synthetic SQLite projection
+  built for the test; nothing yet exercises `ask` against a live,
+  continuously-synchronized filesystem corpus (freshness drift, resync during
+  use, and so on) — a deferred extension.
 - OneDrive and OneNote connectors, semantic search, reranking, and multi-user
   deployment are later phases. OneNote is explicitly not implemented in this
   sprint.
@@ -146,6 +146,22 @@ account = "personal"
 folder_id = "<mail-folder-id>"
 folder_name = "Inbox"
 project = "default"
+allowed_principals = ["employee:employee-zero"]
+
+# Use a separate account binding so calendar consent and tokens stay isolated
+# from the mailbox connector.
+[microsoft_graph.accounts.chief_of_staff_calendar]
+user_id = "lee@example.com"
+scopes = ["Calendars.Read", "User.Read"]
+
+[calendar.chief_of_staff]
+account = "chief_of_staff_calendar"
+calendar_id = "<calendar-id>"
+calendar_name = "Calendar"
+start = "2026-08-08T00:00:00Z"
+end = "2026-11-06T00:00:00Z"
+project = "default"
+allowed_principals = ["employee:employee-zero"]
 ```
 
 Use the device flow and then the same governed retrieval surfaces:
@@ -153,9 +169,13 @@ Use the device flow and then the same governed retrieval surfaces:
 ```bash
 lee-kb auth login --account personal
 lee-kb sync outlook inbox
+lee-kb auth login --account chief_of_staff_calendar
+lee-kb sync calendar chief_of_staff
 lee-kb search "launch review" --principal lee@example.com
 lee-kb ask "what did I say about the launch review?" --principal lee@example.com
+lee-kb search "launch review" --principal employee:employee-zero
 lee-kb auth revoke --account personal
+lee-kb auth revoke --account chief_of_staff_calendar
 ```
 
 The default Linux token store uses the OS Secret Service and fails closed when
@@ -247,25 +267,27 @@ lee-kb ask "what blocks the documentation steward gate?" --project default --top
 ```
 
 `ask` calls the same governed `retrieve()` surface as `search`, then layers
-claim assembly, conflict identification, and confidence assignment on top
-(`src/lee_kb/answer.py`; design in `docs/answer-architecture.md`). Unlike
+claim assembly, conflict identification, confidence assignment, and optional
+source-bounded narration on top (`src/lee_kb/answer.py`; provider in
+`src/lee_kb/synthesis.py`; design in `docs/answer-architecture.md`). Unlike
 `search`, which prints raw ranked evidence, `ask` prints an assembled answer:
 
-- claims (or deterministic, offline synthesized prose over them — no LLM
-  call in this release), each with its own confidence level
+- claims or provider prose, each claim retaining its confidence level
   (`directly_evidenced`, `synthesized`, `inferred`, or `unknown`)
-- citations for every claim
+- citations for every claim, with ordered markers preserved in provider prose
+- freshness status and retrieval receipt references
 - any conflicts between claims, with both sides and no winner picked
 - an explicit absence (`not_found`, `inaccessible`, or `unknown`) instead of
   claims when nothing can be answered — never a silent empty result
-- how many additional retrieved-but-unused evidence items were considered,
-  and a reference to the retrieval receipt(s) behind the answer
+- how many additional retrieved-but-unused evidence items were considered
 
 `ask` is fail-closed exactly like `search`: a missing or unauthorized
 principal is rejected before any evidence is touched, and evidence a
-principal cannot see is reported only as a withheld count, never its
-content. `ask` accepts `--database` (see the `sync` overrides above);
-`search` does not.
+principal cannot see is reported only as a withheld count, never its content.
+If an opted-in synthesis provider fails or returns ungrounded output, `ask`
+returns `UNKNOWN` and preserves receipt/freshness accounting without falling
+back to deterministic prose. `ask` accepts `--database` (see the `sync`
+overrides above); `search` does not.
 
 ### 5. MCP
 
@@ -282,6 +304,31 @@ It exposes `kb_search`, `kb_status`, and the read-only
 and adds governed citations, freshness, and retrieval receipts. See
 `docs/kb-r1-mcp-parity.md` for the exact contract and the explicit
 registration/cutover boundary.
+
+### 6. Multi-principal access (`lee-kb access`)
+
+lee-kb serves multiple AI-employee principals through multiple authenticated
+clients. Identity is server-owned: a client presents a revocable credential;
+the transport never carries or selects a principal.
+
+```bash
+lee-kb access employee add --employee-id chief-of-staff \
+  --principal employee:chief-of-staff \
+  --tenant leebase --lane default --scope operations --purpose knowledge
+lee-kb access client register --principal employee:chief-of-staff \
+  --client-id chief-of-staff:codex        # prints a one-time secret
+lee-kb access grant add --principal employee:chief-of-staff \
+  --project default --source-namespace local_files --root factory
+lee-kb access audit list
+```
+
+An MCP server launched with `LEE_KB_CLIENT_ID` and
+`LEE_KB_CLIENT_SECRET`/`LEE_KB_CLIENT_SECRET_FILE` authenticates every
+governed tool call as that client's employee; without those variables the
+incumbent single-owner behavior is unchanged. Evidence is released only when
+an active grant AND the source-owner ACL (`allowed_principals` on the root or
+source scope) both allow it. See `docs/access-operations.md` for the full
+operations guide, including revocation and audit inspection.
 
 ## AgentFlow workflow
 

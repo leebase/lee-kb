@@ -121,6 +121,63 @@ def test_sync_and_search_end_to_end(workspace) -> None:
     assert "synced" in search_result.stdout
 
 
+@pytest.mark.parametrize(
+    ("command", "query"),
+    (("search", "governed"), ("ask", "what is governed")),
+)
+def test_retrieval_commands_do_not_initialize_an_existing_projection(
+    workspace, monkeypatch, capsys, command, query
+) -> None:
+    workspace["corpus"].mkdir()
+    (workspace["corpus"] / "architecture.md").write_text(
+        "# Architecture\n\nlee-kb is a governed knowledge fabric for retrieval."
+    )
+    _write_config(workspace)
+    assert run_cli("sync", env_overrides=_env(workspace)).returncode == 0
+
+    from lee_kb.main import build_parser
+    from lee_kb.repository import SQLiteRepository
+
+    def unexpected_schema_initialization(_repository) -> None:
+        raise AssertionError("retrieval command attempted schema writes")
+
+    monkeypatch.setenv("LEE_KB_CONFIG", str(workspace["config_path"]))
+    monkeypatch.setattr(
+        SQLiteRepository, "_create_schema", unexpected_schema_initialization
+    )
+    args = build_parser().parse_args([command, query])
+
+    assert args.func(args) == 0
+    assert "architecture.md" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("command", "query"),
+    (("search", "governed"), ("ask", "what is governed")),
+)
+def test_retrieval_commands_explain_required_audit_writes_on_readonly_projection(
+    workspace, command, query
+) -> None:
+    workspace["corpus"].mkdir()
+    (workspace["corpus"] / "architecture.md").write_text(
+        "# Architecture\n\nlee-kb is a governed knowledge fabric for retrieval."
+    )
+    _write_config(workspace)
+    assert run_cli("sync", env_overrides=_env(workspace)).returncode == 0
+    database = workspace["config_path"].parent / "knowledge.sqlite"
+    database.chmod(0o400)
+
+    try:
+        result = run_cli(command, query, env_overrides=_env(workspace))
+    finally:
+        database.chmod(0o600)
+
+    assert result.returncode == 1
+    assert "durable receipts and the query audit event" in result.stderr
+    assert "projection is read-only" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
 def test_sync_source_scoped_to_one_root(workspace) -> None:
     workspace["corpus"].mkdir()
     (workspace["corpus"] / "notes.md").write_text("# Notes\n\ncontent")
@@ -364,7 +421,9 @@ def test_ask_end_to_end_prints_answer_citations_confidence_and_receipt(
     assert "Confidence: directly_evidenced" in result.stdout
     assert "Citations:" in result.stdout
     assert "architecture.md" in result.stdout
+    assert "Freshness: fresh; requirement satisfied" in result.stdout
     assert "receipted at" in result.stdout
+    assert "(confidence: directly_evidenced; source: architecture.md)" in result.stdout
 
 
 def test_ask_denies_evidence_for_unauthorized_principal(workspace) -> None:
@@ -476,3 +535,199 @@ required = false
 
     assert result.returncode == 0
     assert "1 created" in result.stdout
+
+
+# --------------------------------------------------------------------------
+# remember / forget
+# --------------------------------------------------------------------------
+
+
+def _write_memory_config(workspace, *, root_owner="employee:chief-of-staff") -> None:
+    workspace["corpus"].mkdir(exist_ok=True)
+    workspace["config_path"].write_text(f"""
+schema = 1
+owner = "lee@leebase.com"
+database = "{(workspace['config_path'].parent / 'knowledge.sqlite').as_posix()}"
+
+[roots.notes]
+path = "{workspace['corpus'].as_posix()}"
+owner = "{root_owner}"
+include = ["**/*.md"]
+visibility = "private"
+project = "default"
+""")
+
+
+def test_remember_writes_frontmatter_and_syncs_immediately(workspace) -> None:
+    _write_memory_config(workspace)
+
+    result = run_cli(
+        "remember",
+        "--root", "notes",
+        "--memory-type", "relationship",
+        "--subject-principal", "lee",
+        "--title", "Frosty the Snowman",
+        "--content",
+        'Lee and the Chief of Staff use "Happy Birthday!" as a recurring '
+        "Frosty the Snowman reference.",
+        "--confidence", "stated",
+        "--importance", "0.95",
+        env_overrides=_env(workspace),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Remembered:" in result.stdout
+    assert "item_id: local_files:notes:relationship/frosty-the-snowman.md" in result.stdout
+    assert "1 created" in result.stdout
+    written = workspace["corpus"] / "relationship" / "frosty-the-snowman.md"
+    assert written.exists()
+    assert "memory_type: relationship" in written.read_text()
+
+    search = run_cli(
+        "search", "Happy Birthday Frosty",
+        "--principal", "employee:chief-of-staff",
+        env_overrides=_env(workspace),
+    )
+    assert "Frosty" in search.stdout
+
+
+def test_remember_then_search_is_isolated_by_owning_principal(workspace) -> None:
+    """A memory owned by one employee is denied to a different principal.
+
+    Root-level ownership alone is real scope isolation, not just
+    represented metadata: a different principal's search over the exact
+    same query is denied by the same permission evaluator every other
+    item goes through.
+    """
+    _write_memory_config(workspace, root_owner="employee:chief-of-staff")
+    run_cli(
+        "remember",
+        "--root", "notes",
+        "--memory-type", "preference",
+        "--subject-principal", "lee",
+        "--title", "Status update style",
+        "--content", "Lee prefers concise status updates over long narrative ones.",
+        env_overrides=_env(workspace),
+    )
+
+    owner_search = run_cli(
+        "search", "status update style",
+        "--principal", "employee:chief-of-staff",
+        env_overrides=_env(workspace),
+    )
+    other_search = run_cli(
+        "search", "status update style",
+        "--principal", "employee:revenue-director",
+        env_overrides=_env(workspace),
+    )
+
+    assert "concise status updates" in owner_search.stdout
+    assert "No evidence found" in other_search.stdout
+    assert "denied by permissions" in other_search.stdout
+
+
+def test_remember_refuses_existing_slug_without_overwrite(workspace) -> None:
+    _write_memory_config(workspace)
+    args = [
+        "remember",
+        "--root", "notes",
+        "--memory-type", "lesson",
+        "--subject-principal", "lee",
+        "--title", "Define acceptance criteria first",
+        "--content", "Begin significant initiatives with explicit acceptance criteria.",
+    ]
+
+    first = run_cli(*args, env_overrides=_env(workspace))
+    second = run_cli(*args, env_overrides=_env(workspace))
+
+    assert first.returncode == 0
+    assert second.returncode != 0
+    assert "already exists" in second.stderr
+
+    overwrite = run_cli(*args, "--overwrite", env_overrides=_env(workspace))
+    assert overwrite.returncode == 0
+
+
+def test_remember_rejects_out_of_range_importance(workspace) -> None:
+    _write_memory_config(workspace)
+
+    result = run_cli(
+        "remember",
+        "--root", "notes",
+        "--memory-type", "lesson",
+        "--subject-principal", "lee",
+        "--title", "Bad importance",
+        "--content", "content",
+        "--importance", "1.5",
+        env_overrides=_env(workspace),
+    )
+
+    assert result.returncode != 0
+    assert "--importance must be between 0.0 and 1.0" in result.stderr
+
+
+def test_remember_rejects_unknown_memory_type(workspace) -> None:
+    _write_memory_config(workspace)
+
+    result = run_cli(
+        "remember",
+        "--root", "notes",
+        "--memory-type", "opinion",
+        "--subject-principal", "lee",
+        "--title", "Bad type",
+        "--content", "content",
+        env_overrides=_env(workspace),
+    )
+
+    assert result.returncode != 0
+    assert "--memory-type must be one of" in result.stderr
+
+
+def test_forget_tombstones_and_excludes_from_search(workspace) -> None:
+    _write_memory_config(workspace)
+    run_cli(
+        "remember",
+        "--root", "notes",
+        "--memory-type", "episodic",
+        "--subject-principal", "lee",
+        "--title", "A test memory",
+        "--content", "This memory should be forgettable on request.",
+        env_overrides=_env(workspace),
+    )
+    before = run_cli(
+        "search", "forgettable on request",
+        "--principal", "employee:chief-of-staff",
+        env_overrides=_env(workspace),
+    )
+    assert "forgettable" in before.stdout
+
+    forget = run_cli(
+        "forget",
+        "--item-id", "local_files:notes:episodic/a-test-memory.md",
+        env_overrides=_env(workspace),
+    )
+
+    assert forget.returncode == 0
+    assert "Forgot:" in forget.stdout
+    assert not (workspace["corpus"] / "episodic" / "a-test-memory.md").exists()
+
+    after = run_cli(
+        "search", "forgettable on request",
+        "--principal", "employee:chief-of-staff",
+        env_overrides=_env(workspace),
+    )
+    assert "No evidence found" in after.stdout
+
+
+def test_forget_unknown_item_id_reports_actionable_error(workspace) -> None:
+    _write_memory_config(workspace)
+
+    result = run_cli(
+        "forget",
+        "--item-id", "local_files:notes:episodic/never-existed.md",
+        env_overrides=_env(workspace),
+    )
+
+    assert result.returncode != 0
+    assert "was not found live" in result.stderr
+    assert "Traceback" not in result.stderr

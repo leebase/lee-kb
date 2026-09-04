@@ -2,6 +2,349 @@
 
 > **Running log of completed work.** Newest entries are at the top. Each entry
 > records what changed, why it matters, and how to verify it.
+## 2026-08-13 — Governed multi-principal knowledge plane and S1C owner slice
+
+### What Was Built
+
+lee-kb now has a general authenticated multi-principal access boundary that
+separates principal (who acts), client (which authenticated runtime acts for
+that principal), and transport (which never confers identity or authority).
+
+- **Access library** (`src/lee_kb/access.py`): server-owned
+  `EmployeeIdentity`, bounded time-aware `KnowledgeGrant`s, immutable
+  hash-verified `KnowledgePolicy`, `AccessRegistry` (PBKDF2 credentials,
+  opaque sessions, revocation), and `AuthenticatedKnowledgeGateway` over the
+  unmodified governed `retrieve()`. Session bearer tokens never persist:
+  audit rows, receipts, and wire payloads carry one-way `session_reference`
+  digests. Grants never override source-owner item ACLs, and tenant is
+  re-checked at grant evaluation.
+- **Provisioning surface** (`lee-kb access`): employee add/list, client
+  register/list/revoke, grant add/list/revoke, audit list, backed by
+  owner-only `access-policy.json` / `access-clients.json` beside the config.
+  `SourceGrant` gained the explicit `*` whole-root sentinel.
+- **MCP employee mode** (`src/lee_kb/mcp.py`): `LEE_KB_CLIENT_ID` +
+  secret/secret-file env drive every governed tool call through the
+  authenticated gateway; policy and credentials are re-read per call, so CLI
+  revocations reach live server processes. Denials are non-enumerating;
+  `kb_status` reports only granted roots and a granted-subset aggregate
+  state; unknown tool arguments (e.g. a forged `principal`) are rejected.
+  Owner mode without client env is byte-compatible with the incumbent
+  contract, preserving the Factory/Employee Zero registration.
+- **Source-owner ACLs for local roots**: `allowed_principals` on
+  `[roots.*]` (mirroring the Outlook/Calendar convention) flows into item
+  `PermissionSet`s, and the local sync path now applies permission-only
+  changes to content-unchanged records. AppleDouble `._*` files are globally
+  denied, fixing a permanent false-stale signal.
+- **S1C owner slice** (`src/lee_kb/owner.py`, owner-gateway MCP mode): the
+  frozen LeeOS owner contract is implemented end to end — config-driven
+  versioned identity mapping (`lee` → `lee@leebase.com`) with hash-verified
+  grants, an owner handshake in `initialize`, public `retrieve_current`,
+  exact `(repository, commit, path)` history through a bounded
+  git-plumbing resolver plus a versioned historical-release manifest, bound
+  receipts, and single-shape non-enumerating `UNKNOWN` denials.
+  `tools/produce_s1c_owner_evidence.py` regenerates the content-free owner
+  acceptance artifact `evidence/s1c/S1C-lee-kb.json`; it computes
+  **accepted** with 22/22 contract rows, 34/34 matrix cases, and 7/7
+  mutation probes detected.
+
+### Live commissioning evidence (2026-08-13)
+
+- Production projection synchronized; all five Chief-of-Staff operations
+  roots (`factory`, `agent-orch`, `auto-orch`, `agent-board`, `leeos`)
+  report `fresh`. `jobsearch`/`tviq` stay honestly stale from unsupported
+  embedded-content Office files.
+- Provisioned `employee:chief-of-staff` with five whole-root grants and two
+  clients (`chief-of-staff:codex`, `chief-of-staff:jarvis`); source-owner
+  ACLs added to exactly those roots. No Mail/Calendar grant was touched:
+  both remain `employee:employee-zero` only.
+- Positive wire proof: authenticated `chief-of-staff:codex` retrieval
+  released only granted-root evidence with receipts carrying client,
+  session reference, and grant ids (1,157 candidates permission-denied).
+- Real client proof: a live `codex exec` turn called `kb_search` through
+  the registered `lee-kb-chief-of-staff` MCP server and produced a grounded
+  two-sentence answer citing `leeos:context.md` and `leeos:WHERE_AM_I.md`.
+- Negative proofs: jobsearch/mail/calendar queries released zero ungranted
+  evidence; forged `principal` argument → JSON-RPC `-32602`; wrong secret,
+  unknown client, and revoked client → one identical non-enumerating
+  denial; the durable audit log attributes every event to principal and
+  client with query digests only.
+
+### Independent review disposition
+
+An independent boundary review returned **conditional-pass** (no Critical).
+All conditions were repaired same-day: the employee `kb_search` payload no
+longer exposes projection-wide `denied_count` (a cross-grant
+content-existence oracle); the employee `kb_status` aggregate now recomputes
+error states from the granted subset and drops free-text diagnostics (an
+ungranted missing root can neither be observed nor block the employee's own
+searches); session references are now structurally required to be one-way
+sha256 digests by `RetrievalAuthContext`/`AccessAuditEvent`; existing
+projection files with group/other permission bits are tightened to 0600 on
+open; a two-key trace test proves an operator grant naming a mail
+connector's namespace/root still releases nothing without the source-owner
+ACL; and every early owner-history UNKNOWN response now has identical
+pretty-printed serialization, removing response-length enumeration of
+withheld locator bases. The retrieval receipt plane deliberately retains
+full query text (Lee's owner-side audit contract) and is documented as
+distinct from the digest-only access audit plane. Remaining advisories
+(receipt-id volume metadata, directory fsync on policy saves, PBKDF2
+short-circuit timing) are recorded, not repaired.
+
+The S1C admissibility evaluation on the LeeOS side passed 39/39 checks and
+the owner artifact was delivered byte-identically to
+`.sol-max-chief-of-staff/commissioning/owner-acceptance/S1C-lee-kb.json`;
+the join ledger was deliberately untouched.
+
+
+### How to Verify
+
+- `python3 -m pytest tests/ -q` — **517 passed**.
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools`,
+  `python3 -m ruff check src tests tools`, `python3 -m compileall -q src
+  tests tools`, `python3 tools/check_disclosure.py` — clean.
+- `python3 tools/produce_s1c_owner_evidence.py --output /tmp/s1c.json` —
+  `S1C-lee-kb: accepted (0 reasons)`; deterministic `stable_body_sha256`.
+- Operations guide: `docs/access-operations.md`. Owner contract mapping:
+  `docs/s1c-owner-contract.md`.
+
+### Boundary
+
+Read-only knowledge access. No Mail/Calendar broadening, no Jarvis
+container change (credential provisioned, wiring documented only), no
+LeeOS join/ledger mutation from lee-kb, no external action authority.
+
+## 2026-08-11 — Snowflake-first backlog reprioritization
+
+### What Changed
+
+The operator clarified that lee-kb is not intended to recreate Glean and will
+likely use Snowflake if structured analytics are needed. BI-008's generic
+semantic manifest and its dependent BI-009 live-query proof are now `someday`;
+BI-010 was already `someday`. BI-007 remains `next` only as a planning guardrail
+before concrete Snowflake work, with an explicit preference for Snowflake-native
+semantic and query facilities over a lee-kb database platform.
+
+`research/glean-comparison.md`, `context.md`, and `sprint-plan.md` now record
+that direction. No application code, architecture, API, persisted schema,
+dependency, provider connection, or external data path changed.
+
+### Verification
+
+- BI-008 and BI-009 frontmatter parse with `priority: someday`; BI-010 remains
+  `someday`.
+- The comparison and project memory state Snowflake-first reuse and explicitly
+  reject a generic lee-kb semantic platform.
+- `python3 tools/check_disclosure.py` remains clean.
+
+## 2026-08-11 — Glean comparison and structured-data backlog
+
+### What Was Built
+
+`research/glean-comparison.md` separates verified public Glean behavior from
+interpretation and unverified commercial context, then compares that behavior
+with lee-kb's current personal-first projection, governed retrieval, answer,
+MCP, connector, permission, relationship, and execution boundaries.
+
+Six schema-complete, unapproved candidates were added:
+
+- BI-007 — Structured Data Access Boundary
+- BI-008 — Semantic Asset Manifest and Readiness Validator
+- BI-009 — Governed Structured Query Contract and Offline Proof
+- BI-010 — Mixed Indexed and Live Evidence Benchmark
+- BI-011 — Relationship Persistence and Retrieval Benchmark
+- BI-012 — Source Permission Change Conformance
+
+Repository-wide disclosure verification also found five pre-existing absolute
+home-directory paths in `docs/account-onboarding-hotmail-onenote.md`. They now
+use the documented `~/.config/lee-kb/` form; no command behavior changed.
+
+### Why It Matters
+
+The comparison preserves the patterns that fit lee-kb—source authority,
+permission-aware evidence, explicit indexed/live access, semantic readiness,
+and relationship measurement—without importing Glean's enterprise control
+plane or agent execution scope. It identifies one real ambiguity before any
+warehouse implementation: durable structured knowledge may be indexed, but
+volatile analytical facts should not become copied document chunks by default.
+
+### Verification
+
+- All six candidate frontmatters parsed as YAML. Required fields, sequential
+  BI-007 through BI-012 IDs, `candidate` status, enums, definitions of done,
+  and internal BI dependencies validated with zero errors.
+- All six public references in `research/glean-comparison.md` resolved and were
+  read from the official Glean documentation or product site.
+- `python3 tools/check_disclosure.py` — clean after replacing the five
+  pre-existing absolute paths; no host paths or credentials remain in
+  repository files.
+- No application code, architecture decision, public interface, persisted
+  schema, dependency, provider connection, or external data path changed, so no
+  behavioral test suite was applicable to this research work unit.
+
+## 2026-08-09 — Live synthesis wiring approval package review
+
+### What Was Built
+
+The highest-ranked live-wiring action was reviewed against the current
+provider seam and project memory. No exact client/version, model ID or cost
+ceiling, route/API project, credential resolution path, telemetry policy, retry
+policy, or named CLI/library opt-in surface is approved. The approval package
+now records each required decision, the evidence boundary, the no-fallback
+invariants, and the explicit block on SDK, credential, network, and live CLI
+changes.
+
+Focused regression coverage now asserts that provider requests contain only
+finalized claim text, confidence, and ordered markers; source identifiers and
+locators are excluded; invalid empty input does not call the client; the
+default CLI prose is deterministic; and provider failure preserves receipt
+closure, freshness, `UNKNOWN`, and `SYNTHESIS_FAILURE` omissions without
+disclosing claim text or diagnostics.
+
+### Why It Matters
+
+The product can move toward a live opt-in provider without turning an
+unapproved model client or secret path into a runtime dependency. Retrieval
+permissions remain upstream of synthesis, and governed claims, citations,
+freshness, receipts, and fail-closed answer metadata remain authoritative.
+
+### How to Verify
+
+- `python3 -m pytest tests/test_synthesis.py tests/test_answer.py tests/test_cli.py -q` — **49 passed**.
+- `python3 -m pytest tests/ -q` — **393 passed**.
+- `python3 -m pytest tests/test_cli.py::test_ask_end_to_end_prints_answer_citations_confidence_and_receipt tests/test_answer.py::test_synthesis_provider_failure_is_unknown_without_fallback tests/test_synthesis.py::test_provider_failure_does_not_expose_client_error_or_claim_text -q` — **3 passed**.
+- `python3 -m ruff check src tests tools` — clean; the existing top-level-settings deprecation warning remains.
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` — clean; 54 files unchanged.
+- `python3 tools/check_disclosure.py` — clean; no host paths or credentials.
+
+### Remaining Gate
+
+Live implementation remains blocked until the operator records and approves
+every worksheet value in `docs/openai-synthesis-decision.md`. No live endpoint,
+SDK, credential loader, model selection, telemetry sink, retry policy, or CLI
+opt-in path was added or exercised.
+
+
+## 2026-08-09 — Source-bounded synthesis provider core
+
+### What Was Built
+
+The source-bounded synthesis slice is implemented and documented. The opt-in
+`OpenAIResponsesSynthesisProvider` accepts only finalized claims through an
+injected Responses-compatible client, preserves ordered citation markers, and
+rejects empty, overlong, or ungrounded output. Provider failures become an
+explicit `UNKNOWN` answer with `SYNTHESIS_FAILURE` omissions; no deterministic
+fallback hides the failure. `Answer.freshness` carries the exact completed
+retrieval report, while incomplete retrieval leaves freshness unset.
+
+The default `lee-kb ask` path remains deterministic, offline, and
+standard-library-only. No SDK, credential loader, model selection, network
+call, or live route was added. Live wiring remains gated on approval of the
+exact client/version, model and cost ceiling, route, secret boundary,
+metadata-only telemetry, and bounded retry policy.
+
+### Why It Matters
+
+Natural-language narration can be added without giving a provider search,
+authorization, or provenance authority. Claims, citations, confidence,
+freshness, and receipts remain governed fields, and a provider failure is
+visible instead of silently replaced with fabricated or deterministic prose.
+
+### How to Verify
+
+- `python3 -m pytest tests/ -q` — **392 passed**.
+- `python3 -m ruff check src tests tools` — clean; only the existing
+  configuration-deprecation warning is emitted.
+- `BLACK_NUM_WORKERS=1 python3 -m black --check src tests tools` — clean.
+- `python3 tools/check_disclosure.py` — clean; no host paths or credentials.
+
+## 2026-08-09 — Curated real-corpus benchmark handoff and workflow verification
+
+### What Was Built
+
+The personal-release OR-matcher decision and disclosure-safe curated
+Chief-of-Staff benchmark are complete. `tools/run_curated_benchmark.py` reads
+the operator question set at runtime, copies the local projection before
+querying, exercises governed `retrieve()` and deterministic `answer()`, and
+emits only aggregate metrics and opaque case IDs. The accepted exhaustive
+candidate-retrieval behavior and its current-scale measurement are recorded in
+`evidence/real-corpus-parity-report.md`; the synthesis-provider package remains
+an approval-gated design with no runtime dependency or model call.
+
+### Why It Matters
+
+The release has a reproducible quality/performance measurement for the real
+Chief-of-Staff question shape without publishing question text, source
+locators, evidence, or claims. Governance remains exercised before evidence
+assembly, and the deterministic offline answer path remains the default.
+
+### How to Verify
+
+- `python3 -m pytest tests/test_curated_benchmark.py tests/answers/test_answer_benchmarks.py -q` — **41 passed**.
+- Temporary local-corpus CLI smoke — `sync`, repeated `sync`, `search`, and `ask` succeeded with idempotent synchronization, citations, freshness, and receipts.
+- `python3 -m ruff check src tests tools` — clean; the existing top-level-settings deprecation warning remains.
+- `python3 -m black --check tools/run_curated_benchmark.py tests/test_curated_benchmark.py` — clean.
+- `python3 tools/check_disclosure.py` — clean.
+
+The continuously synchronized filesystem `ask` proof, LLM provider approval,
+and Employee Zero consumer parity-scope decision remain explicit follow-ons.
+
+
+## 2026-08-09 — Employee Zero Chief of Staff knowledge proof
+
+Employee Zero completed supervised Auto-Orch cycle `20260809T200630Z` and
+Agent-Orch run `04e42891c922`. The run rebuilt and checked the local knowledge
+index, exercised the pinned deployment smoke, completed four independently
+verified user journeys, passed review, and verified 10 evidence entries /
+151 artifacts with canonical employee/tenant identity.
+
+The Factory smoke assertion was updated for the completed MCP cutover:
+`.mcp.json` now proves `lee-kb` / `lee-kb-mcp`, not the retired
+`employee-zero-kb` registration. The combined smoke command passed. This does
+not broaden Microsoft Graph permissions or authorize mail/calendar mutation.
+
+
+## 2026-08-09 — Live Outlook, Calendar, and Employee Zero grant
+
+### What Was Built
+
+The existing leebase.com public-client registration now backs two separate
+delegated account bindings. One can request exactly `Mail.Read` and
+`User.Read`; the other can request exactly `Calendars.Read` and `User.Read`.
+The configured Inbox and default Calendar were discovered through Graph and
+bound by immutable provider IDs. Outlook synchronization created 50 private
+message records; the fixed 2026-08-08 through 2026-11-06 calendar view created
+15 private event records. Immediate no-change passes reported all 65 records
+unchanged.
+
+`OutlookScope` and `CalendarScope` now carry explicit `allowed_principals`.
+Their private `PermissionSet` records grant Employee Zero as
+`employee:employee-zero`; they do not broaden the provider token or transfer
+ownership. `_sync_external_connector()` and `SQLiteRepository.sync_permissions()`
+apply a changed grant to content-unchanged records without fetching, chunking,
+or duplicating their content.
+
+### Evidence
+
+- Both device flows completed and verified `lee@leebase.com`; tokens remained
+  in the OS secret service.
+- Governed retrieval as `employee:employee-zero` returned evidence from the
+  calendar connector for a calendar query and from the Outlook connector for a
+  mailbox query.
+- The same mailbox query as `employee:documentation-steward` returned zero
+  evidence and 44 permission denials.
+- No message body, event text, token, device code, calendar join URL, or folder
+  ID is reproduced in this review.
+- `python3 -m pytest -q` — **380 passed**.
+- Focused Ruff check — clean except the existing top-level-settings
+  deprecation warning.
+
+### Boundary
+
+This is read-only access. Sending/deleting mail, invitation response, calendar
+mutation, publication, promotion, and any other external action remain
+unauthorized.
+
+---
 
 ## 2026-08-06 — KB-R1 MCP parity surface delivered
 

@@ -9,8 +9,10 @@ used.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
+import stat
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -19,6 +21,8 @@ from pathlib import Path
 
 from .contracts import (
     SCHEMA_VERSION,
+    AccessAuditEvent,
+    AccessAuditOutcome,
     Authority,
     ChangeType,
     Chunk,
@@ -28,11 +32,14 @@ from .contracts import (
     JournalEntry,
     KnowledgeItem,
     KnowledgeItemId,
+    MemoryConfidence,
+    MemoryType,
     PermissionSet,
     Principal,
     PrincipalType,
     RetrievalAuditEvent,
     RetrievalAuditStatus,
+    RetrievalAuthContext,
     RetrievalReceipt,
     SourceLocator,
     Trust,
@@ -80,6 +87,14 @@ class Repository(ABC):
     ) -> JournalEntry | None:
         """Mark an existing item deleted without discarding its metadata."""
 
+    def sync_permissions(
+        self, item_id: KnowledgeItemId, permissions: PermissionSet
+    ) -> bool:
+        """Apply a changed access grant without re-chunking unchanged content."""
+        raise NotImplementedError(
+            "this repository does not expose permission-only synchronization"
+        )
+
     @abstractmethod
     def search(
         self,
@@ -95,6 +110,34 @@ class Repository(ABC):
         ``match="any"`` ORs content tokens (paraphrase-friendly, BM25-ranked);
         ``match="all"`` requires every token (strict exact-token mode).
         """
+    def search_all(
+        self,
+        query: str,
+        *,
+        project: str,
+        include_tombstoned: bool = False,
+        match: str = "any",
+    ) -> tuple[SearchHit, ...]:
+        """Return every lexical match without repeated provider allocations.
+
+        Backends may override this with one exhaustive query.  The default
+        preserves compatibility for repository implementations that expose
+        only the bounded ``search`` primitive.
+        """
+        limit = 32
+        while True:
+            hits = self.search(
+                query,
+                project=project,
+                limit=limit,
+                include_tombstoned=include_tombstoned,
+                match=match,
+            )
+            if len(hits) < limit:
+                return hits
+            limit *= 2
+
+
 
     @abstractmethod
     def record_receipt(self, receipt: RetrievalReceipt) -> int:
@@ -109,6 +152,14 @@ class Repository(ABC):
         raise NotImplementedError(
             "this repository does not expose retrieval audit events"
         )
+
+    def record_access_event(self, event: AccessAuditEvent) -> int:
+        """Persist non-content authentication/authorization evidence."""
+        raise NotImplementedError("this repository does not expose access audit events")
+
+    def list_access_events(self) -> tuple[tuple[int, AccessAuditEvent], ...]:
+        """List non-content access evidence when supported."""
+        raise NotImplementedError("this repository does not expose access audit events")
 
     def has_live_items(self, project: str) -> bool:
         """Return whether a project has any live item when supported.
@@ -176,6 +227,12 @@ CREATE TABLE IF NOT EXISTS knowledge_items (
     tombstone INTEGER NOT NULL CHECK (tombstone IN (0, 1)),
     tombstoned_at TEXT,
     schema_version INTEGER NOT NULL,
+    memory_type TEXT,
+    subject_principal TEXT,
+    memory_confidence TEXT,
+    importance REAL,
+    memory_formed_at TEXT,
+    superseded_by TEXT,
     PRIMARY KEY (connector_id, source_object_id)
 );
 
@@ -267,7 +324,10 @@ CREATE TABLE IF NOT EXISTS retrieval_receipts (
     principal_display_name TEXT,
     principal_groups_json TEXT NOT NULL,
     project TEXT NOT NULL,
-    query TEXT NOT NULL
+    query TEXT NOT NULL,
+    client_id TEXT,
+    session_id TEXT,
+    grant_ids_json TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS retrieval_audit_events (
@@ -283,7 +343,30 @@ CREATE TABLE IF NOT EXISTS retrieval_audit_events (
     denied_count INTEGER NOT NULL,
     released_count INTEGER NOT NULL,
     truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
-    status TEXT NOT NULL
+    status TEXT NOT NULL,
+    client_id TEXT,
+    session_id TEXT,
+    grant_ids_json TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE TABLE IF NOT EXISTS access_audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    session_id TEXT,
+    principal_id TEXT,
+    principal_type TEXT,
+    principal_display_name TEXT,
+    principal_groups_json TEXT NOT NULL DEFAULT '[]',
+    tenant TEXT NOT NULL,
+    project TEXT,
+    operation TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    reason_code TEXT NOT NULL,
+    grant_ids_json TEXT NOT NULL DEFAULT '[]',
+    query_digest TEXT,
+    freshness_state TEXT
 );
 """
 
@@ -291,11 +374,34 @@ CREATE TABLE IF NOT EXISTS retrieval_audit_events (
 class SQLiteRepository(Repository):
     """SQLite-backed latest-state projection using only the standard library."""
 
-    def __init__(self, database: str | Path) -> None:
-        self._connection = sqlite3.connect(str(database))
+    def __init__(
+        self, database: str | Path, *, initialize_schema: bool = True
+    ) -> None:
+        if not isinstance(initialize_schema, bool):
+            raise TypeError("initialize_schema must be a bool")
+        database_path = Path(database)
+        if initialize_schema:
+            self._connection = sqlite3.connect(str(database_path))
+        else:
+            database_uri = f"{database_path.resolve().as_uri()}?mode=rw"
+            self._connection = sqlite3.connect(database_uri, uri=True)
+        if initialize_schema:
+            try:
+                # The projection stores private evidence, receipts, and access
+                # audit rows; keep database files owner-only. Existing files with
+                # wider modes are tightened when this process owns them.
+                info = database_path.stat()
+                group_other = stat.S_IRWXG | stat.S_IRWXO
+                if info.st_uid == os.geteuid() and info.st_mode & group_other:
+                    os.chmod(database_path, stat.S_IRUSR | stat.S_IWUSR)
+            except OSError:
+                pass
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")
-        self._create_schema()
+        if initialize_schema:
+            self._create_schema()
+        else:
+            self._require_current_schema()
 
     def __enter__(self) -> SQLiteRepository:
         return self
@@ -311,16 +417,36 @@ class SQLiteRepository(Repository):
         try:
             with self._connection:
                 self._connection.executescript(_SCHEMA)
+                self._ensure_column("retrieval_receipts", "client_id", "TEXT")
+                self._ensure_column("retrieval_receipts", "session_id", "TEXT")
+                self._ensure_column(
+                    "retrieval_receipts",
+                    "grant_ids_json",
+                    "TEXT NOT NULL DEFAULT '[]'",
+                )
+                self._ensure_column("retrieval_audit_events", "client_id", "TEXT")
+                self._ensure_column("retrieval_audit_events", "session_id", "TEXT")
+                self._ensure_column(
+                    "retrieval_audit_events",
+                    "grant_ids_json",
+                    "TEXT NOT NULL DEFAULT '[]'",
+                )
+                self._ensure_column("knowledge_items", "memory_type", "TEXT")
+                self._ensure_column("knowledge_items", "subject_principal", "TEXT")
+                self._ensure_column("knowledge_items", "memory_confidence", "TEXT")
+                self._ensure_column("knowledge_items", "importance", "REAL")
+                self._ensure_column("knowledge_items", "memory_formed_at", "TEXT")
+                self._ensure_column("knowledge_items", "superseded_by", "TEXT")
                 row = self._connection.execute(
                     "SELECT value FROM meta WHERE key = 'schema_version'"
                 ).fetchone()
                 stored_version = None if row is None else int(row["value"])
-                if stored_version not in (None, 1, SCHEMA_VERSION):
+                if stored_version not in (None, 1, 2, SCHEMA_VERSION):
                     raise RuntimeError(
                         "unsupported repository schema version "
                         f"{row['value']}; expected {SCHEMA_VERSION}"
                     )
-                if stored_version == 1:
+                if stored_version in (1, 2):
                     self._connection.execute(
                         "UPDATE knowledge_items SET schema_version = ?",
                         (SCHEMA_VERSION,),
@@ -336,6 +462,30 @@ class SQLiteRepository(Repository):
             if "fts5" in str(error).lower():
                 raise RuntimeError("this SQLite build does not provide FTS5") from error
             raise
+
+    def _ensure_column(self, table: str, column: str, definition: str) -> None:
+        columns = {
+            row["name"]
+            for row in self._connection.execute(f"PRAGMA table_info({table})")
+        }
+        if column not in columns:
+            self._connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            )
+
+    def _require_current_schema(self) -> None:
+        """Validate an existing projection without creating or migrating it."""
+        try:
+            version = self.schema_version
+        except sqlite3.DatabaseError as error:
+            raise RuntimeError(
+                "existing repository projection is not initialized"
+            ) from error
+        if version != SCHEMA_VERSION:
+            raise RuntimeError(
+                f"repository schema version {version} requires migration; "
+                "run `lee-kb sync` with write access first"
+            )
 
     @property
     def schema_version(self) -> int:
@@ -383,6 +533,46 @@ class SQLiteRepository(Repository):
             if cursor is not None:
                 self._upsert_cursor(item_id.connector_id, cursor, sync_timestamp)
         return entry
+
+    def sync_permissions(
+        self, item_id: KnowledgeItemId, permissions: PermissionSet
+    ) -> bool:
+        if not isinstance(item_id, KnowledgeItemId):
+            raise TypeError("item_id must be a KnowledgeItemId")
+        if not isinstance(permissions, PermissionSet):
+            raise TypeError("permissions must be a PermissionSet")
+        current = self._connection.execute(
+            """
+            SELECT i.tombstone, p.owner, p.visibility,
+                   p.allowed_principals_json, p.allowed_groups_json,
+                   p.classification
+            FROM knowledge_items AS i
+            JOIN permissions AS p USING (connector_id, source_object_id)
+            WHERE i.connector_id = ? AND i.source_object_id = ?
+            """,
+            (item_id.connector_id, item_id.source_object_id),
+        ).fetchone()
+        if current is None or bool(current["tombstone"]):
+            raise KeyError(f"cannot update permissions for missing live item {item_id}")
+        desired = (
+            permissions.owner,
+            permissions.visibility.value,
+            _dump_tuple(permissions.allowed_principals),
+            _dump_tuple(permissions.allowed_groups),
+            permissions.classification,
+        )
+        existing = (
+            current["owner"],
+            current["visibility"],
+            current["allowed_principals_json"],
+            current["allowed_groups_json"],
+            current["classification"],
+        )
+        if existing == desired:
+            return False
+        with self._connection:
+            self._upsert_permissions(item_id, permissions)
+        return True
 
     def _sync_item_in_transaction(
         self, item: KnowledgeItem, chunks: tuple[Chunk, ...]
@@ -547,8 +737,10 @@ class SQLiteRepository(Repository):
                 connector_id, source_object_id, project, source_uri,
                 source_label, source_fragment, document_type, content_hash,
                 source_timestamp, sync_timestamp, title, tags_json, authority,
-                trust, tombstone, tombstoned_at, schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                trust, tombstone, tombstoned_at, schema_version,
+                memory_type, subject_principal, memory_confidence,
+                importance, memory_formed_at, superseded_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(connector_id, source_object_id) DO UPDATE SET
                 project = excluded.project,
                 source_uri = excluded.source_uri,
@@ -564,7 +756,13 @@ class SQLiteRepository(Repository):
                 trust = excluded.trust,
                 tombstone = excluded.tombstone,
                 tombstoned_at = excluded.tombstoned_at,
-                schema_version = excluded.schema_version
+                schema_version = excluded.schema_version,
+                memory_type = excluded.memory_type,
+                subject_principal = excluded.subject_principal,
+                memory_confidence = excluded.memory_confidence,
+                importance = excluded.importance,
+                memory_formed_at = excluded.memory_formed_at,
+                superseded_by = excluded.superseded_by
             """,
             (
                 item.item_id.connector_id,
@@ -584,6 +782,12 @@ class SQLiteRepository(Repository):
                 int(item.tombstone),
                 _optional_datetime(item.tombstoned_at),
                 item.schema_version,
+                item.memory_type.value if item.memory_type is not None else None,
+                item.subject_principal,
+                item.memory_confidence.value if item.memory_confidence is not None else None,
+                item.importance,
+                _optional_datetime(item.memory_formed_at),
+                item.superseded_by,
             ),
         )
 
@@ -801,21 +1005,56 @@ class SQLiteRepository(Repository):
         include_tombstoned: bool = False,
         match: str = "any",
     ) -> tuple[SearchHit, ...]:
-        if not isinstance(project, str) or not project.strip():
-            raise ValueError("project must be a non-empty string")
         if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
             raise ValueError("limit must be a positive integer")
+        return self._search(
+            query,
+            project=project,
+            include_tombstoned=include_tombstoned,
+            match=match,
+            limit=limit,
+        )
+
+    def search_all(
+        self,
+        query: str,
+        *,
+        project: str,
+        include_tombstoned: bool = False,
+        match: str = "any",
+    ) -> tuple[SearchHit, ...]:
+        """Return all ranked FTS hits with one row materialization pass."""
+        return self._search(
+            query,
+            project=project,
+            include_tombstoned=include_tombstoned,
+            match=match,
+            limit=None,
+        )
+
+    def _search(
+        self,
+        query: str,
+        *,
+        project: str,
+        include_tombstoned: bool,
+        match: str,
+        limit: int | None,
+    ) -> tuple[SearchHit, ...]:
+        if not isinstance(project, str) or not project.strip():
+            raise ValueError("project must be a non-empty string")
         fts_query = _fts_query(query, match=match)
         if fts_query is None:
             return ()
-        rows = self._connection.execute(
-            """
+        sql = """
             SELECT c.*, bm25(chunks_fts) AS score,
                    i.source_uri, i.source_label, i.source_fragment,
                    i.document_type, i.content_hash AS item_content_hash,
                    i.source_timestamp, i.sync_timestamp,
                    i.title, i.tags_json, i.authority, i.trust, i.tombstone,
                    i.tombstoned_at, i.schema_version,
+                   i.memory_type, i.subject_principal, i.memory_confidence,
+                   i.importance, i.memory_formed_at, i.superseded_by,
                    p.owner, p.visibility, p.allowed_principals_json,
                    p.allowed_groups_json, p.classification
             FROM chunks_fts
@@ -829,10 +1068,16 @@ class SQLiteRepository(Repository):
             WHERE chunks_fts MATCH ? AND i.project = ?
               AND (? OR i.tombstone = 0)
             ORDER BY score, c.connector_id, c.source_object_id, c.chunk_ordinal
-            LIMIT ?
-            """,
-            (fts_query, project, int(include_tombstoned), limit),
-        ).fetchall()
+        """
+        parameters: tuple[object, ...] = (
+            fts_query,
+            project,
+            int(include_tombstoned),
+        )
+        if limit is not None:
+            sql += " LIMIT ?"
+            parameters = (*parameters, limit)
+        rows = self._connection.execute(sql, parameters).fetchall()
         return tuple(
             SearchHit(
                 item=_item_from_row(row),
@@ -851,8 +1096,9 @@ class SQLiteRepository(Repository):
                     source_connector_id, source_uri, source_label,
                     source_fragment, retrieval_timestamp, principal_id,
                     principal_type, principal_display_name,
-                    principal_groups_json, project, query
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    principal_groups_json, project, query,
+                    client_id, session_id, grant_ids_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     receipt.knowledge_item_id.connector_id,
@@ -870,6 +1116,21 @@ class SQLiteRepository(Repository):
                     _dump_tuple(receipt.principal.groups),
                     receipt.project,
                     receipt.query,
+                    (
+                        None
+                        if receipt.auth_context is None
+                        else receipt.auth_context.client_id
+                    ),
+                    (
+                        None
+                        if receipt.auth_context is None
+                        else receipt.auth_context.session_id
+                    ),
+                    _dump_tuple(
+                        ()
+                        if receipt.auth_context is None
+                        else receipt.auth_context.grant_ids
+                    ),
                 ),
             )
         if cursor.lastrowid is None:
@@ -886,8 +1147,8 @@ class SQLiteRepository(Repository):
                     query, retrieval_timestamp, principal_id, principal_type,
                     principal_display_name, principal_groups_json, project,
                     candidate_count, denied_count, released_count, truncated,
-                    status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, client_id, session_id, grant_ids_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.query,
@@ -902,11 +1163,70 @@ class SQLiteRepository(Repository):
                     event.released_count,
                     int(event.truncated),
                     event.status.value,
+                    (
+                        None
+                        if event.auth_context is None
+                        else event.auth_context.client_id
+                    ),
+                    (
+                        None
+                        if event.auth_context is None
+                        else event.auth_context.session_id
+                    ),
+                    _dump_tuple(
+                        ()
+                        if event.auth_context is None
+                        else event.auth_context.grant_ids
+                    ),
                 ),
             )
         if cursor.lastrowid is None:
             raise RuntimeError("SQLite did not assign an audit event identifier")
         return cursor.lastrowid
+
+    def record_access_event(self, event: AccessAuditEvent) -> int:
+        if not isinstance(event, AccessAuditEvent):
+            raise TypeError("event must be an AccessAuditEvent")
+        principal = event.principal
+        with self._connection:
+            cursor = self._connection.execute(
+                """
+                INSERT INTO access_audit_events(
+                    event_type, timestamp, client_id, session_id,
+                    principal_id, principal_type, principal_display_name,
+                    principal_groups_json, tenant, project, operation,
+                    outcome, reason_code, grant_ids_json, query_digest,
+                    freshness_state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.event_type,
+                    event.timestamp.isoformat(),
+                    event.client_id,
+                    event.session_id,
+                    None if principal is None else principal.principal_id,
+                    None if principal is None else principal.principal_type.value,
+                    None if principal is None else principal.display_name,
+                    _dump_tuple(() if principal is None else principal.groups),
+                    event.tenant,
+                    event.project,
+                    event.operation,
+                    event.outcome.value,
+                    event.reason_code,
+                    _dump_tuple(event.grant_ids),
+                    event.query_digest,
+                    event.freshness_state,
+                ),
+            )
+        if cursor.lastrowid is None:
+            raise RuntimeError("SQLite did not assign an access audit identifier")
+        return cursor.lastrowid
+
+    def list_access_events(self) -> tuple[tuple[int, AccessAuditEvent], ...]:
+        rows = self._connection.execute(
+            "SELECT * FROM access_audit_events ORDER BY id"
+        ).fetchall()
+        return tuple((row["id"], _access_event_from_row(row)) for row in rows)
 
     def get_receipt(self, receipt_id: int) -> RetrievalReceipt | None:
         row = self._connection.execute(
@@ -973,6 +1293,18 @@ def _item_from_row(row: sqlite3.Row) -> KnowledgeItem:
         tombstone=bool(row["tombstone"]),
         tombstoned_at=_parse_optional_datetime(row["tombstoned_at"]),
         schema_version=row["schema_version"],
+        memory_type=(
+            MemoryType(row["memory_type"]) if row["memory_type"] is not None else None
+        ),
+        subject_principal=row["subject_principal"],
+        memory_confidence=(
+            MemoryConfidence(row["memory_confidence"])
+            if row["memory_confidence"] is not None
+            else None
+        ),
+        importance=row["importance"],
+        memory_formed_at=_parse_optional_datetime(row["memory_formed_at"]),
+        superseded_by=row["superseded_by"],
     )
 
 
@@ -1008,6 +1340,20 @@ def _journal_from_row(row: sqlite3.Row) -> JournalEntry:
     )
 
 
+def _auth_context_from_row(row: sqlite3.Row) -> RetrievalAuthContext | None:
+    client_id = row["client_id"]
+    session_id = row["session_id"]
+    if client_id is None and session_id is None:
+        return None
+    if client_id is None or session_id is None:
+        raise RuntimeError("repository auth context is incomplete")
+    return RetrievalAuthContext(
+        client_id=client_id,
+        session_id=session_id,
+        grant_ids=_load_tuple(row["grant_ids_json"]),
+    )
+
+
 def _receipt_from_row(row: sqlite3.Row) -> RetrievalReceipt:
     item_id = KnowledgeItemId(row["connector_id"], row["source_object_id"])
     return RetrievalReceipt(
@@ -1033,6 +1379,7 @@ def _receipt_from_row(row: sqlite3.Row) -> RetrievalReceipt:
         ),
         project=row["project"],
         query=row["query"],
+        auth_context=_auth_context_from_row(row),
     )
 
 
@@ -1052,6 +1399,37 @@ def _audit_event_from_row(row: sqlite3.Row) -> RetrievalAuditEvent:
         released_count=row["released_count"],
         truncated=bool(row["truncated"]),
         status=RetrievalAuditStatus(row["status"]),
+        auth_context=_auth_context_from_row(row),
+    )
+
+
+def _access_event_from_row(row: sqlite3.Row) -> AccessAuditEvent:
+    principal_id = row["principal_id"]
+    principal = None
+    if principal_id is not None:
+        principal_type = row["principal_type"]
+        if principal_type is None:
+            raise RuntimeError("access audit principal type is missing")
+        principal = Principal(
+            principal_id=principal_id,
+            principal_type=PrincipalType(principal_type),
+            display_name=row["principal_display_name"],
+            groups=_load_tuple(row["principal_groups_json"]),
+        )
+    return AccessAuditEvent(
+        event_type=row["event_type"],
+        timestamp=datetime.fromisoformat(row["timestamp"]),
+        client_id=row["client_id"],
+        session_id=row["session_id"],
+        principal=principal,
+        tenant=row["tenant"],
+        project=row["project"],
+        operation=row["operation"],
+        outcome=AccessAuditOutcome(row["outcome"]),
+        reason_code=row["reason_code"],
+        grant_ids=_load_tuple(row["grant_ids_json"]),
+        query_digest=row["query_digest"],
+        freshness_state=row["freshness_state"],
     )
 
 

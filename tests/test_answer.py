@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from lee_kb.answer import DEFAULT_SYNTHESIS_PROVIDER, answer
-from lee_kb.answer_contracts import AbsenceKind, Confidence, Side
+from lee_kb.answer_contracts import AbsenceKind, Confidence, OmissionReason, Side
 from lee_kb.chunking import MARKDOWN_CHUNKER_ID
 from lee_kb.contracts import (
     DEFAULT_PROJECT,
@@ -254,6 +254,8 @@ def test_default_synthesis_provider_produces_attributed_prose(repository) -> Non
     assert result.prose is not None
     assert result.synthesis_provider_id == DEFAULT_SYNTHESIS_PROVIDER.provider_id
     assert "single.md" in result.prose
+    assert result.freshness is not None
+    assert result.freshness.requirement_satisfied is True
 
 
 def test_synthesis_provider_none_disables_narration(repository) -> None:
@@ -264,6 +266,46 @@ def test_synthesis_provider_none_disables_narration(repository) -> None:
     assert result.prose is None
     assert result.synthesis_provider_id is None
     assert result.claims
+
+
+def test_synthesis_provider_failure_is_unknown_without_fallback(repository) -> None:
+    add_source(repository, "single.md", "The rollout completed on schedule.")
+
+    class FailingProvider:
+        provider_id = "test.failing-provider"
+
+        def narrate(self, claims):
+            raise RuntimeError("provider diagnostic must not escape")
+
+    result = ask(
+        repository,
+        "rollout schedule",
+        synthesis_provider=FailingProvider(),
+    )
+
+    assert result.is_absent
+    assert result.absence.kind is AbsenceKind.UNKNOWN
+    assert result.confidence is Confidence.UNKNOWN
+    assert result.claims == ()
+    assert result.prose is None
+    assert result.synthesis_provider_id == "test.failing-provider"
+    assert result.freshness is not None
+    assert result.freshness.requirement_satisfied is True
+    assert result.receipt_ids
+    assert result.evidence_used == ()
+    assert result.evidence_omitted
+    assert {omitted.reason for omitted in result.evidence_omitted} == {
+        OmissionReason.SYNTHESIS_FAILURE
+    }
+    assert "provider diagnostic" not in (result.absence.detail or "")
+
+    assert len(result.evidence_omitted) == len(result.receipt_ids)
+    assert {omitted.chunk_id for omitted in result.evidence_omitted} == {
+        receipt_id.chunk_id for receipt_id in result.receipt_ids
+    }
+    assert result.withheld_count == 0
+    assert result.truncated is False
+    assert "rollout completed" not in (result.absence.detail or "")
 
 
 def test_denied_evidence_is_reported_inaccessible_not_not_found(repository) -> None:

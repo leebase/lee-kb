@@ -179,7 +179,7 @@ in front of them.
 
 ## Provenance Guarantees
 
-Four invariants are enforced at construction, so a malformed `Answer` cannot be
+Five invariants are enforced at construction, so a malformed `Answer` cannot be
 built at all — the failure surfaces where the answer is assembled, not in a
 consumer's rendering code:
 
@@ -195,6 +195,10 @@ consumer's rendering code:
 4. **Attributed prose.** If `prose` is set, `synthesis_provider_id` must name
    the provider that produced it. Model-produced text is identifiable wherever
    it appears, consistent with `Trust.MODEL_PRODUCED` on citations.
+
+5. **Freshness closure.** A completed retrieval copies its exact
+   `FreshnessReport` onto `Answer.freshness`; when retrieval does not complete,
+   freshness is `None` rather than an invented status.
 
 Together these give the property the platform is built for: from any published
 answer, a reader can walk every sentence back to a chunk, that chunk back to a
@@ -253,28 +257,38 @@ a citation, resolve a conflict, upgrade a confidence label, or reach evidence
 the authorization layer withheld — because none of those are reachable from its
 one argument.
 
-This is what lets an LLM-backed provider be added later without touching the
-pipeline: a new class implementing `narrate()`, registered by the caller. The
-`Answer` records which one ran via `synthesis_provider_id`, so model-produced
-prose stays attributable. No LLM dependency enters `answer_contracts.py`, which
-remains standard-library-only in line with the project's dependency-approval
-guardrail.
+The release has two provider implementations. `DeterministicSynthesisProvider`
+is the default template renderer and remains the CLI/reference path.
+`OpenAIResponsesSynthesisProvider` is an opt-in implementation that accepts an
+injected OpenAI-compatible `responses.create` client. It does not import an SDK,
+load credentials, choose an API route, or access a repository.
+
+The opt-in provider formats the finalized claims into a source-bounded request.
+It includes claim text, confidence, and ordered citation markers, but no source
+locators or permission facts. It accepts only non-empty, bounded output that
+preserves every marker exactly once in claim order. A request, response, or
+grounding-bound failure raises `SynthesisProviderError`.
+
+`answer()` catches synthesis failures and returns an `UNKNOWN` answer with no
+claims or prose, the provider ID, the exact retrieval freshness report and
+receipt IDs, and explicit `SYNTHESIS_FAILURE` omissions for selected evidence.
+There is no deterministic or other hidden fallback. The CLI continues to use
+the deterministic provider unless a caller supplies an approved client.
 
 Implementations must preserve claim order, so a citation marker in the prose
-still maps to the claim it came from. v1 ships with
-`DeterministicSynthesisProvider` as its default provider: `answer()` returns
-claims, citations, and deterministic template prose unless narration is
-explicitly disabled. That keeps the first release LLM-free and consistent with
-the locked decision to validate the evidence path with the fewest moving parts.
+still maps to the claim it came from. `Answer` retains claims, confidence,
+citations, freshness, and retrieval receipts independently of provider prose.
+The provider cannot change those governed fields.
 
 ## Deferred Extensions
 
 Explicitly out of scope for this contract, with the reason each can be added
 later without redesign:
 
-- **LLM synthesis provider.** Blocked on dependency approval, the same
-  guardrail that gates the office-format parsers. The `SynthesisProvider`
-  protocol is the entire integration point; nothing else changes.
+- **Live provider wiring.** The source-bounded provider is implemented without a
+  runtime dependency. An operator must still approve the exact client version,
+  model, route, credential/secret boundary, telemetry, and retry policy before
+  wiring a live CLI or production path.
 - **Real query planning.** v1 planning is a pass-through. Decomposition,
   multi-query retrieval, and follow-up questions change how the
   `RetrieveRequest` is built, not what an `Answer` looks like.

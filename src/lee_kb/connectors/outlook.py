@@ -123,6 +123,7 @@ class OutlookScope:
     account_id: str | None = None
     tenant: str | None = None
     credential_binding: str | None = None
+    allowed_principals: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_text(self.mailbox_owner, "mailbox_owner")
@@ -136,6 +137,9 @@ class OutlookScope:
         _require_optional_text(self.account_id, "account_id")
         _require_optional_text(self.tenant, "tenant")
         _require_optional_text(self.credential_binding, "credential_binding")
+        _require_tuple(self.allowed_principals, "allowed_principals")
+        for principal in self.allowed_principals:
+            _require_text(principal, "allowed_principals entry")
 
 
 @dataclass(frozen=True, slots=True)
@@ -534,6 +538,7 @@ class OutlookConnector(Connector):
         return PermissionSet(
             owner=self._scope.mailbox_owner,
             visibility=Visibility.PRIVATE,
+            allowed_principals=self._scope.allowed_principals,
             classification="delegated-mail-read",
         )
 
@@ -566,8 +571,7 @@ class OutlookConnector(Connector):
                 False,
                 checked_at,
                 detail=(
-                    "Outlook transport temporarily unavailable: "
-                    f"{type(error).__name__}"
+                    f"Outlook transport temporarily unavailable: {type(error).__name__}"
                 ),
             )
         except Exception as error:

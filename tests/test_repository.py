@@ -8,12 +8,15 @@ import pytest
 
 from lee_kb.contracts import (
     DEFAULT_PROJECT,
+    SCHEMA_VERSION,
     ChangeType,
     Chunk,
     ChunkId,
     DocumentType,
     KnowledgeItem,
     KnowledgeItemId,
+    MemoryConfidence,
+    MemoryType,
     PermissionSet,
     Principal,
     RetrievalReceipt,
@@ -138,8 +141,50 @@ def test_tombstone_hides_search_result_but_receipt_remains_resolvable(
 
 
 def test_schema_version_is_stored_and_readable(repository) -> None:
-    assert repository.schema_version == 2
-    assert repository.get_schema_version() == 2
+    assert repository.schema_version == SCHEMA_VERSION
+    assert repository.get_schema_version() == SCHEMA_VERSION
+
+
+def test_existing_projection_can_open_without_schema_initialization(
+    tmp_path, monkeypatch
+) -> None:
+    database = tmp_path / "knowledge.sqlite"
+    with SQLiteRepository(database) as repository:
+        item, chunks = make_projection()
+        repository.sync_item(item, chunks)
+
+    def unexpected_schema_initialization(_repository) -> None:
+        raise AssertionError("existing retrieval projection attempted schema writes")
+
+    monkeypatch.setattr(
+        SQLiteRepository, "_create_schema", unexpected_schema_initialization
+    )
+    with SQLiteRepository(database, initialize_schema=False) as existing:
+        hits = existing.search("disposable", project=DEFAULT_PROJECT)
+
+    assert hits[0].item.item_id == item.item_id
+
+
+def test_existing_projection_open_refuses_schema_that_requires_migration(
+    tmp_path,
+) -> None:
+    database = tmp_path / "knowledge.sqlite"
+    with SQLiteRepository(database):
+        pass
+    connection = sqlite3.connect(database)
+    connection.execute("UPDATE meta SET value = '2' WHERE key = 'schema_version'")
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(RuntimeError, match="requires migration"):
+        SQLiteRepository(database, initialize_schema=False)
+
+    connection = sqlite3.connect(database)
+    stored_version = connection.execute(
+        "SELECT value FROM meta WHERE key = 'schema_version'"
+    ).fetchone()[0]
+    connection.close()
+    assert stored_version == "2"
 
 
 def test_schema_v1_migrates_to_query_audit_events(tmp_path) -> None:
@@ -156,9 +201,60 @@ def test_schema_v1_migrates_to_query_audit_events(tmp_path) -> None:
     connection.close()
 
     with SQLiteRepository(database) as migrated:
-        assert migrated.schema_version == 2
-        assert migrated.get_item(item.item_id).schema_version == 2
+        assert migrated.schema_version == SCHEMA_VERSION
+        assert migrated.get_item(item.item_id).schema_version == SCHEMA_VERSION
         assert migrated.list_retrieval_events() == ()
+
+
+def test_schema_v2_migrates_additively_with_null_memory_columns(tmp_path) -> None:
+    """A v2 projection (no memory columns) opens cleanly under v3.
+
+    Existing rows survive untouched, gain NULL memory columns via
+    ``_ensure_column``, and get their per-row ``schema_version`` bumped --
+    mirroring the v1 migration test above.
+    """
+    database = tmp_path / "knowledge.sqlite"
+    with SQLiteRepository(database) as repository:
+        item, chunks = make_projection()
+        repository.sync_item(item, chunks)
+
+    connection = sqlite3.connect(database)
+    connection.execute("UPDATE meta SET value = '2' WHERE key = 'schema_version'")
+    connection.execute("UPDATE knowledge_items SET schema_version = 2")
+    connection.commit()
+    connection.close()
+
+    with SQLiteRepository(database) as migrated:
+        assert migrated.schema_version == SCHEMA_VERSION
+        restored = migrated.get_item(item.item_id)
+        assert restored.schema_version == SCHEMA_VERSION
+        assert restored.memory_type is None
+        assert restored.importance is None
+        # And the memory columns are genuinely writable post-migration.
+        memory_item = make_projection(text="Lee prefers concise status updates.")[0]
+        memory_item = replace(
+            memory_item,
+            item_id=KnowledgeItemId("local_files", "memory/preferences/status.md"),
+            memory_type=MemoryType.PREFERENCE,
+            subject_principal="lee",
+            memory_confidence=MemoryConfidence.STATED,
+            importance=0.8,
+        )
+        chunk = replace(
+            make_projection()[1][0],
+            chunk_id=ChunkId(
+                item_id=memory_item.item_id,
+                chunk_ordinal=0,
+                content_hash=compute_content_hash("Lee prefers concise status updates."),
+            ),
+            text="Lee prefers concise status updates.",
+        )
+        migrated.sync_item(memory_item, (chunk,))
+        reloaded = migrated.get_item(memory_item.item_id)
+        assert reloaded.memory_type is MemoryType.PREFERENCE
+        assert reloaded.subject_principal == "lee"
+        assert reloaded.memory_confidence is MemoryConfidence.STATED
+        assert reloaded.importance == 0.8
 
 
 def test_cursor_does_not_advance_when_ingestion_fails(repository) -> None:

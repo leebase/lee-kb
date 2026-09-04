@@ -181,6 +181,7 @@ def test_detected_conflict_retains_both_sides_through_answer_assembly(
         question=bundle.request.query,
         principal=bundle.request.principal,
         project=bundle.request.project,
+        freshness=bundle.freshness,
         claims=claims,
         confidence=Confidence.DIRECTLY_EVIDENCED,
         receipt_ids=selection.receipt_ids,

@@ -1,4 +1,4 @@
-"""The governed ``answer()`` surface: claim assembly and deterministic synthesis.
+"""The governed ``answer()`` surface: claim assembly and bounded synthesis.
 
 ``answer()`` is a thin, deterministic composition layered strictly on top of
 :func:`lee_kb.governance.retrieve`. It calls that function and nothing else to
@@ -33,14 +33,12 @@ Design rules, unchanged from ``answer_contracts.py``:
 
 Synthesis seam: :class:`DeterministicSynthesisProvider` is the default
 :class:`~lee_kb.answer_contracts.SynthesisProvider`. It is a template
-renderer over already-assembled claims -- offline, LLM-free, and standard
-library only. An LLM-backed provider is specified in
-``docs/answer-architecture.md`` as the same protocol's other implementation,
-but it is deliberately **not implemented here**: it requires a runtime
-dependency (a model client) that has not been approved per
-``AGENTS.md``'s "Add external runtime dependencies" guardrail. Adding it
-later means writing one class with a ``narrate()`` method and registering it
-via ``synthesis_provider=``; nothing in this module changes.
+renderer over already-assembled claims -- offline, deterministic, and standard
+library only. :class:`lee_kb.synthesis.OpenAIResponsesSynthesisProvider` is an
+opt-in implementation that receives only finalized claims through an injected
+Responses client; it does not load credentials or add a runtime dependency.
+Provider failures become an ``UNKNOWN`` answer with retrieval receipts
+preserved, never a deterministic or other hidden fallback.
 """
 
 from __future__ import annotations
@@ -91,6 +89,7 @@ from .governance import (
     RetrievalProviderError,
     retrieve,
 )
+from .synthesis import SynthesisProviderError
 
 if TYPE_CHECKING:
     from .repository import Repository
@@ -295,6 +294,7 @@ def _assemble_resolution_failure(
         question=question,
         principal=principal,
         project=project,
+        freshness=None,
         claims=(),
         confidence=Confidence.UNKNOWN,
         receipt_ids=(),
@@ -332,6 +332,7 @@ def _assemble_absence(bundle: EvidenceBundle, assessment: AbsenceAssessment) -> 
         question=bundle.request.query,
         principal=bundle.request.principal,
         project=bundle.request.project,
+        freshness=bundle.freshness,
         claims=(),
         confidence=Confidence.UNKNOWN,
         receipt_ids=tuple(
@@ -363,6 +364,7 @@ def _assemble_no_grounded_evidence(
         question=bundle.request.query,
         principal=bundle.request.principal,
         project=bundle.request.project,
+        freshness=bundle.freshness,
         claims=(),
         confidence=Confidence.UNKNOWN,
         receipt_ids=selection.receipt_ids,
@@ -371,6 +373,48 @@ def _assemble_no_grounded_evidence(
         conflicts=(),
         absence=absence,
         answered_at=bundle.retrieval_timestamp,
+        withheld_count=bundle.denied_count,
+        truncated=bundle.truncated,
+    )
+
+
+def _assemble_synthesis_failure(
+    bundle: EvidenceBundle,
+    selection: EvidenceSelection,
+    *,
+    provider_id: str | None,
+) -> Answer:
+    """Return UNKNOWN while preserving every retrieval receipt."""
+    evidence_omitted = selection.answer_omissions + tuple(
+        OmittedEvidence(
+            evidence=EvidenceRef(
+                chunk_id=item.chunk_id,
+                source_locator=item.citation.source_locator,
+            ),
+            reason=OmissionReason.SYNTHESIS_FAILURE,
+            detail="The synthesis provider failed before producing grounded prose.",
+        )
+        for item in selection.selected
+    )
+    return Answer(
+        question=bundle.request.query,
+        principal=bundle.request.principal,
+        project=bundle.request.project,
+        freshness=bundle.freshness,
+        claims=(),
+        confidence=Confidence.UNKNOWN,
+        receipt_ids=selection.receipt_ids,
+        evidence_used=(),
+        evidence_omitted=evidence_omitted,
+        conflicts=(),
+        absence=Absence(
+            kind=AbsenceKind.UNKNOWN,
+            question=bundle.request.query,
+            detail="The synthesis provider could not produce a grounded answer.",
+            searched_projects=bundle.request.effective_projects,
+        ),
+        answered_at=bundle.retrieval_timestamp,
+        synthesis_provider_id=provider_id,
         withheld_count=bundle.denied_count,
         truncated=bundle.truncated,
     )
@@ -411,12 +455,19 @@ def _assemble_evidenced_answer(
         EvidenceRef(chunk_id=item.chunk_id, source_locator=item.citation.source_locator)
         for item in selection.selected
     )
-    prose, synthesis_provider_id = _narrate(provider, final_claims)
-
+    try:
+        prose, synthesis_provider_id = _narrate(provider, final_claims)
+    except Exception:
+        return _assemble_synthesis_failure(
+            bundle,
+            selection,
+            provider_id=_provider_id(provider) if provider is not None else None,
+        )
     return Answer(
         question=bundle.request.query,
         principal=bundle.request.principal,
         project=bundle.request.project,
+        freshness=bundle.freshness,
         claims=final_claims,
         confidence=overall_confidence,
         receipt_ids=selection.receipt_ids,
@@ -437,7 +488,12 @@ def _narrate(
 ) -> tuple[str | None, str | None]:
     if provider is None:
         return None, None
-    return provider.narrate(claims), _provider_id(provider)
+    prose = provider.narrate(claims)
+    if not isinstance(prose, str) or not prose.strip():
+        raise SynthesisProviderError(
+            "synthesis provider returned empty or invalid prose"
+        )
+    return prose.strip(), _provider_id(provider)
 
 
 def _provider_id(provider: SynthesisProvider) -> str:

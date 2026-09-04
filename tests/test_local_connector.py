@@ -38,6 +38,10 @@ from lee_kb.contracts import (
     DocumentType,
     KnowledgeItem,
     KnowledgeItemId,
+    MemoryConfidence,
+    MemoryType,
+    Principal,
+    PrincipalType,
     Trust,
     compute_content_hash,
 )
@@ -55,9 +59,11 @@ def write_config(
     authority="derived",
     trust="curated",
     owner="lee@leebase.com",
+    allowed_principals=(),
 ) -> None:
     include_toml = ", ".join(f'"{pattern}"' for pattern in include)
     exclude_toml = ", ".join(f'"{pattern}"' for pattern in exclude)
+    allowed_toml = ", ".join(f'"{principal}"' for principal in allowed_principals)
     config_path.write_text(f"""
 schema = 1
 
@@ -68,6 +74,7 @@ include = [{include_toml}]
 exclude = [{exclude_toml}]
 authority = "{authority}"
 trust = "{trust}"
+allowed_principals = [{allowed_toml}]
 """)
 
 
@@ -434,6 +441,52 @@ include = ["*.md"]
     assert roots[0].path == (config_dir / "docs").resolve()
 
 
+def test_load_config_accepts_live_calendar_source_shape(tmp_path) -> None:
+    source_root = tmp_path / "workspace"
+    source_root.mkdir()
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(f"""
+schema = 1
+owner = "lee@leebase.com"
+workspace_root = "{tmp_path.as_posix()}"
+
+[roots.factory]
+path = "workspace"
+owner = "lee@leebase.com"
+include = ["*.md"]
+
+[microsoft_graph]
+client_id = "public-client-id"
+
+[microsoft_graph.accounts.personal]
+user_id = "lee@leebase.com"
+tenant = "common"
+scopes = ["Mail.Read", "User.Read"]
+
+[outlook.inbox]
+account = "personal"
+folder_id = "inbox"
+folder_name = "Inbox"
+project = "default"
+allowed_principals = ["employee:employee-zero"]
+
+[calendar.chief_of_staff]
+account = "chief_of_staff_calendar"
+owner = "lee@leebase.com"
+calendar_id = "calendar"
+calendar_name = "Calendar"
+start = "2026-08-08T00:00:00+00:00"
+end = "2026-11-06T00:00:00+00:00"
+project = "default"
+allowed_principals = ["employee:employee-zero"]
+""")
+
+    roots = load_config(config_path)
+
+    assert [root.name for root in roots] == ["factory"]
+    assert roots[0].path == source_root.resolve()
+
+
 def test_unknown_config_keys_are_collected_across_all_levels(tmp_path) -> None:
     config_path = tmp_path / "sources.toml"
     config_path.write_text("""
@@ -734,6 +787,33 @@ def test_temp_and_hidden_office_files_are_explicitly_excluded(tmp_path) -> None:
     assert report.out_of_scope_formats == {".docx": 1}
 
 
+def test_appledouble_metadata_files_are_excluded_at_every_depth(tmp_path) -> None:
+    """AppleDouble `._*` resource forks are junk metadata, never knowledge.
+
+    They previously matched markdown includes (`*.md`) and failed as
+    unreadable on every sync, leaving an otherwise-fresh root permanently
+    stale.
+    """
+    connector = make_connector(
+        tmp_path,
+        {
+            "note.md": "# real note",
+            "._note.md": "AppleDouble resource fork",
+            "docs/plan.md": "# plan",
+            "docs/._plan.md": "AppleDouble resource fork",
+        },
+        include=("*.md", "docs/*.md"),
+    )
+
+    report = connector.discover_report()
+
+    assert sorted(obj.source_object_id for obj in report.objects) == [
+        "notes:docs/plan.md",
+        "notes:note.md",
+    ]
+    assert not report.failures
+
+
 def test_discovery_failure_does_not_tombstone_temporarily_inaccessible_item(
     tmp_path, repository, monkeypatch
 ) -> None:
@@ -770,6 +850,54 @@ def test_discovery_failure_does_not_tombstone_temporarily_inaccessible_item(
     assert summary.failure_counts == {"temporarily_inaccessible": 1}
     assert item is not None and not item.tombstone
     assert repository.get_connector_cursor(connector.connector_id) == previous_cursor
+
+
+def test_root_allowed_principals_grant_and_ungrant_reach_governed_retrieval(
+    tmp_path, repository
+) -> None:
+    """A source-owner root grant releases evidence to the named employee and a
+    later config ungrant reaches content-unchanged records on the next sync."""
+    from lee_kb.governance import retrieve
+    from lee_kb.main import _sync_connector
+
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "plan.md").write_text("# operations plan for the quarter")
+    config_path = tmp_path / "sources.toml"
+    write_config(
+        config_path,
+        source_root,
+        allowed_principals=("employee:chief-of-staff",),
+    )
+    connector = LocalFilesConnector.from_config(config_path)
+    _sync_connector(connector, repository, root_filter=None, sync_timestamp=SYNC_TIME)
+
+    chief = Principal("employee:chief-of-staff", PrincipalType.AI_EMPLOYEE)
+    other = Principal("employee:employee-zero", PrincipalType.AI_EMPLOYEE)
+    granted = retrieve(
+        repository, "operations plan", principal=chief, project="default"
+    )
+    assert len(granted.evidence) == 1
+    denied = retrieve(repository, "operations plan", principal=other, project="default")
+    assert not denied.evidence
+    assert denied.denied_count == 1
+
+    # Ungrant with unchanged content: the permission-only pass must apply it.
+    write_config(config_path, source_root, allowed_principals=())
+    connector = LocalFilesConnector.from_config(config_path)
+    summary = _sync_connector(
+        connector,
+        repository,
+        root_filter=None,
+        sync_timestamp=SYNC_TIME + timedelta(hours=1),
+    )
+    assert summary.created == summary.updated == 0
+
+    revoked = retrieve(
+        repository, "operations plan", principal=chief, project="default"
+    )
+    assert not revoked.evidence
+    assert revoked.denied_count == 1
 
 
 def test_missing_optional_root_does_not_tombstone_its_previous_items(
@@ -1063,3 +1191,150 @@ def test_sync_skips_and_counts_file_containing_token_shaped_secret(
     assert hits == ()
     hits = repository.search("ordinary", project=DEFAULT_PROJECT, limit=5)
     assert {hit.item.item_id.source_object_id for hit in hits} == {"notes:good.md"}
+
+
+# --------------------------------------------------------------------------
+# Memory frontmatter (schema v3)
+# --------------------------------------------------------------------------
+
+
+def test_parse_memory_frontmatter_strips_recognized_block() -> None:
+    content = (
+        "---\n"
+        "memory_type: relationship\n"
+        "subject_principal: lee\n"
+        "confidence: stated\n"
+        "importance: 0.9\n"
+        "formed_at: 2026-08-15T00:00:00Z\n"
+        "allowed_principals: employee:chief-of-staff, employee:revenue-director\n"
+        "---\n"
+        "\n"
+        "# Frosty\n\nHappy Birthday is a Frosty the Snowman reference.\n"
+    )
+
+    fields, remainder = local_files_module.parse_memory_frontmatter(content)
+
+    assert fields["memory_type"] is MemoryType.RELATIONSHIP
+    assert fields["subject_principal"] == "lee"
+    assert fields["memory_confidence"] is MemoryConfidence.STATED
+    assert fields["importance"] == 0.9
+    assert fields["memory_formed_at"] == datetime(2026, 8, 15, tzinfo=timezone.utc)
+    assert fields["allowed_principals"] == (
+        "employee:chief-of-staff",
+        "employee:revenue-director",
+    )
+    assert "memory_type" not in remainder
+    assert remainder.strip().startswith("# Frosty")
+
+
+def test_parse_memory_frontmatter_ignores_ordinary_horizontal_rule() -> None:
+    """A doc that opens with '---' but has no recognized memory_type is untouched.
+
+    This is the safety property the whole design depends on: ordinary
+    markdown that happens to start with a horizontal rule (or an
+    unrelated frontmatter dialect) must never be misparsed or have
+    content silently dropped.
+    """
+    content = "---\ntitle: Just a doc\nauthor: someone\n---\n\nOrdinary content.\n"
+
+    fields, remainder = local_files_module.parse_memory_frontmatter(content)
+
+    assert fields == {}
+    assert remainder == content
+
+
+def test_parse_memory_frontmatter_ignores_unterminated_block() -> None:
+    content = "---\nmemory_type: relationship\nno closing delimiter here\n"
+
+    fields, remainder = local_files_module.parse_memory_frontmatter(content)
+
+    assert fields == {}
+    assert remainder == content
+
+
+def test_parse_memory_frontmatter_clamps_and_ignores_invalid_fields() -> None:
+    content = (
+        "---\n"
+        "memory_type: lesson\n"
+        "importance: 7.5\n"
+        "formed_at: not-a-timestamp\n"
+        "confidence: extremely-sure\n"
+        "---\n"
+        "Body.\n"
+    )
+
+    fields, _remainder = local_files_module.parse_memory_frontmatter(content)
+
+    assert fields["memory_type"] is MemoryType.LESSON
+    assert "importance" not in fields
+    assert "memory_formed_at" not in fields
+    assert "memory_confidence" not in fields
+
+
+def test_fetch_populates_memory_fields_from_frontmatter(tmp_path) -> None:
+    connector = make_connector(
+        tmp_path,
+        {
+            "memory/relationship/frosty.md": (
+                "---\n"
+                "memory_type: relationship\n"
+                "subject_principal: lee\n"
+                "confidence: stated\n"
+                "importance: 0.95\n"
+                "---\n\n"
+                "# Frosty\n\nHappy Birthday means Frosty the Snowman.\n"
+            ),
+            "ordinary.md": "# Just a note\n\nNothing special here.\n",
+        },
+    )
+
+    memory_doc = connector.fetch("notes:memory/relationship/frosty.md")
+    assert memory_doc.memory_type is MemoryType.RELATIONSHIP
+    assert memory_doc.subject_principal == "lee"
+    assert memory_doc.memory_confidence is MemoryConfidence.STATED
+    assert memory_doc.importance == 0.95
+    assert "memory_type" not in memory_doc.content
+    assert "Happy Birthday means Frosty the Snowman." in memory_doc.content
+
+    ordinary_doc = connector.fetch("notes:ordinary.md")
+    assert ordinary_doc.memory_type is None
+    assert ordinary_doc.content == "# Just a note\n\nNothing special here.\n"
+
+
+def test_permissions_applies_per_file_visibility_override_from_frontmatter(
+    tmp_path,
+) -> None:
+    connector = make_connector(
+        tmp_path,
+        {
+            "memory/preferences/shared.md": (
+                "---\n"
+                "memory_type: preference\n"
+                "subject_principal: lee\n"
+                "visibility: project\n"
+                "allowed_principals: employee:revenue-director\n"
+                "---\n\nShared preference.\n"
+            ),
+        },
+        owner="employee:chief-of-staff",
+    )
+
+    permissions = connector.permissions("notes:memory/preferences/shared.md")
+
+    assert permissions.owner == "employee:chief-of-staff"  # root owner never overridden
+    assert permissions.visibility.value == "project"
+    assert permissions.allowed_principals == ("employee:revenue-director",)
+
+
+def test_permissions_falls_back_to_root_defaults_without_frontmatter(tmp_path) -> None:
+    connector = make_connector(
+        tmp_path,
+        {"ordinary.md": "# Note\n\nNo frontmatter here.\n"},
+        owner="employee:chief-of-staff",
+    )
+
+    permissions = connector.permissions("notes:ordinary.md")
+
+    assert permissions.owner == "employee:chief-of-staff"
+    assert permissions.visibility.value == "private"
+    assert permissions.allowed_principals == ()

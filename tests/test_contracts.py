@@ -12,6 +12,7 @@ import pytest
 
 from lee_kb.contracts import (
     DEFAULT_PROJECT,
+    SCHEMA_VERSION,
     Authority,
     ChangeType,
     Chunk,
@@ -27,6 +28,8 @@ from lee_kb.contracts import (
     JournalEntry,
     KnowledgeItem,
     KnowledgeItemId,
+    MemoryConfidence,
+    MemoryType,
     MetadataFilters,
     PermissionSet,
     Principal,
@@ -222,7 +225,43 @@ def test_knowledge_item_constructs_with_provenance_and_permissions() -> None:
     assert item.trust is Trust.CURATED
     assert item.tombstone is False
     assert item.is_retrievable is True
-    assert item.schema_version == 2
+    assert item.schema_version == SCHEMA_VERSION
+    assert item.memory_type is None
+
+
+def test_knowledge_item_constructs_with_memory_metadata() -> None:
+    item = make_item(
+        memory_type=MemoryType.RELATIONSHIP,
+        subject_principal="lee",
+        memory_confidence=MemoryConfidence.STATED,
+        importance=0.9,
+        memory_formed_at=SOURCE_TIME,
+        superseded_by=None,
+    )
+
+    assert item.memory_type is MemoryType.RELATIONSHIP
+    assert item.subject_principal == "lee"
+    assert item.memory_confidence is MemoryConfidence.STATED
+    assert item.importance == 0.9
+    assert item.memory_formed_at == SOURCE_TIME
+
+
+def test_knowledge_item_rejects_memory_metadata_without_memory_type() -> None:
+    with pytest.raises(ValueError):
+        make_item(subject_principal="lee")
+    with pytest.raises(ValueError):
+        make_item(importance=0.5)
+    with pytest.raises(ValueError):
+        make_item(superseded_by="local_files:memory/old.md")
+
+
+def test_knowledge_item_rejects_importance_out_of_range() -> None:
+    with pytest.raises(ValueError):
+        make_item(memory_type=MemoryType.LESSON, importance=1.5)
+    with pytest.raises(ValueError):
+        make_item(memory_type=MemoryType.LESSON, importance=-0.1)
+    with pytest.raises(TypeError):
+        make_item(memory_type=MemoryType.LESSON, importance="high")
 
 
 def test_chunk_constructs_and_derives_item_identity() -> None:

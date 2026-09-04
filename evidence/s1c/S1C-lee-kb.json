@@ -1,0 +1,1636 @@
+{
+  "adapter_candidates": [
+    {
+      "candidate": "lee-kb-mcp stdio",
+      "dependency": "none",
+      "status": "selected"
+    },
+    {
+      "candidate": "python-api import",
+      "dependency": "lee-kb package import into consumer runtime",
+      "reason": "no satisfied GATE-DEP-001 entry exists; candidate never installed or trialled",
+      "status": "not-evaluated"
+    }
+  ],
+  "artifact_id": "S1C-lee-kb",
+  "artifact_sha256": "e71590e99099a96332baddfdb82f4c7f3461585c6f9899a2abc5f0d932a8c3a3",
+  "checks": {
+    "artifact_is_content_free": {
+      "detail": "payload leaks: none",
+      "value": true
+    },
+    "artifact_sections_present": {
+      "detail": "missing evidence sections: none",
+      "value": true
+    },
+    "current_receipt_complete": {
+      "detail": "missing current receipt fields: none",
+      "value": true
+    },
+    "current_receipts_persisted_per_call": {
+      "detail": "persisted current receipts after two identical wire queries: 2",
+      "value": true
+    },
+    "history_receipt_complete": {
+      "detail": "missing history receipt fields: none",
+      "value": true
+    },
+    "mapping_hash_matches_consumer_algorithm": {
+      "detail": "owner mapping hash equals the consumer's canonical sha256 of the same body",
+      "value": true
+    },
+    "no_write_holds": {
+      "detail": "source corpus digests identical across sync + retrieve + history",
+      "value": true
+    },
+    "owner_module_compiles": {
+      "detail": "python3 -m compileall -q src/lee_kb/owner.py",
+      "value": true
+    },
+    "owner_seam_recovery_surface": {
+      "detail": "the owner seams expose no timeout/cancel surface; REC-08 timeout, cancel and process recovery remain consumer-side and unproven in this repository",
+      "value": true
+    },
+    "tests_test_mcp_passes": {
+      "detail": "python3 -m pytest tests/test_mcp.py -q",
+      "value": true
+    },
+    "tests_test_owner_passes": {
+      "detail": "python3 -m pytest tests/test_owner.py -q",
+      "value": true
+    },
+    "wire_history_release_capable": {
+      "detail": "kb_history_get releases one exact object with a complete receipt and answers every withheld basis identically; missing wire receipt fields: none",
+      "value": true
+    },
+    "wire_identity_is_mapped": {
+      "detail": "kb_search identity is the versioned OwnerIdentityMapping, and the receipt binds its version and hash; the configured owner is ignored",
+      "value": true
+    },
+    "wire_owner_handshake_exposed": {
+      "detail": "initialize serverInfo.owner publishes every owner version and the mapping hash, so wire-side drift is detectable; missing fields: none",
+      "value": true
+    },
+    "wire_receipt_keys_within_consumer_allowlist": {
+      "detail": "every additive receipt name the wire emits is normalized by the consumer; outside the allowlist: none",
+      "value": true
+    },
+    "wire_required_tools_present": {
+      "detail": "initialize + tools/list expose kb_search and kb_history_get",
+      "value": true
+    }
+  },
+  "commands": [
+    {
+      "argv": [
+        "python3",
+        "-m",
+        "compileall",
+        "-q",
+        "src/lee_kb/owner.py"
+      ],
+      "name": "compileall_owner",
+      "output_bytes": 0,
+      "output_normalization": "pytest-normalized/v1",
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "python3",
+        "-m",
+        "lee_kb.mcp"
+      ],
+      "name": "mcp_stdio_handshake",
+      "output_bytes": null,
+      "output_normalization": "content-free-handshake/v1",
+      "output_sha256": "563eebfbe6c4fc354f23dba0d5858d465e762327ed323728d847ca827aaee9bd",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "python3",
+        "-m",
+        "pytest",
+        "tests/test_mcp.py",
+        "-q"
+      ],
+      "name": "pytest_test_mcp",
+      "output_bytes": 104,
+      "output_normalization": "pytest-normalized/v1",
+      "output_sha256": "047135122857891eb8d4762877be72f077adf5fea05bcd09cefe7412c49e3c82",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "python3",
+        "-m",
+        "pytest",
+        "tests/test_owner.py",
+        "-q"
+      ],
+      "name": "pytest_test_owner",
+      "output_bytes": 104,
+      "output_normalization": "pytest-normalized/v1",
+      "output_sha256": "5bb2bdcdc645d729f1935fd324ffb747fd96983b1cea40b17710c64283265e4b",
+      "returncode": 0
+    }
+  ],
+  "contract_rows": [
+    {
+      "cases": [],
+      "checks": [
+        "tests_test_owner_passes",
+        "tests_test_mcp_passes",
+        "owner_module_compiles"
+      ],
+      "reasons": [],
+      "requirement": "owner-native tests complete before the Core adapter",
+      "row_id": "D1.owner_native_tests",
+      "satisfied": true,
+      "source": "Deliver 1"
+    },
+    {
+      "cases": [
+        "current.owner_handshake_complete",
+        "current.wire_owner_handshake"
+      ],
+      "checks": [
+        "wire_required_tools_present",
+        "wire_owner_handshake_exposed"
+      ],
+      "reasons": [],
+      "requirement": "version/schema/corpus/identity/permission handshake complete before the Core adapter",
+      "row_id": "D1.handshake_complete",
+      "satisfied": true,
+      "source": "Deliver 1"
+    },
+    {
+      "cases": [
+        "history.wire_release_capable"
+      ],
+      "checks": [
+        "history_receipt_complete",
+        "current_receipt_complete",
+        "wire_receipt_keys_within_consumer_allowlist"
+      ],
+      "reasons": [],
+      "requirement": "field/receipt/freshness/recovery parity for current and exact history",
+      "row_id": "D1.field_receipt_freshness_parity",
+      "satisfied": true,
+      "source": "Deliver 1"
+    },
+    {
+      "cases": [
+        "current.mapped_principal_admitted",
+        "current.unmapped_principal_denied"
+      ],
+      "checks": [
+        "mapping_hash_matches_consumer_algorithm"
+      ],
+      "reasons": [],
+      "requirement": "exact immutable server-side mapping of Core principal lee to lee-kb lee@leebase.com",
+      "row_id": "D2.immutable_server_mapping",
+      "satisfied": true,
+      "source": "Deliver 2"
+    },
+    {
+      "cases": [
+        "current.client_cannot_send_identity_fields",
+        "history.wire_rejects_identity_arguments"
+      ],
+      "checks": [],
+      "reasons": [],
+      "requirement": "clients and delegates cannot send principal or groups",
+      "row_id": "D2.clients_cannot_send_identity",
+      "satisfied": true,
+      "source": "Deliver 2"
+    },
+    {
+      "cases": [
+        "current.widened_project_rejected",
+        "current.widened_scope_rejected"
+      ],
+      "checks": [],
+      "reasons": [],
+      "requirement": "clients cannot widen project, source, root, path or item, or broaden filters",
+      "row_id": "D2.clients_cannot_widen_scope",
+      "satisfied": true,
+      "source": "Deliver 2"
+    },
+    {
+      "cases": [
+        "current.multi_project_requires_explicit_grant"
+      ],
+      "checks": [],
+      "reasons": [],
+      "requirement": "multi-project access requires an explicit grant and separate receipts",
+      "row_id": "D2.multi_project_requires_grant",
+      "satisfied": true,
+      "source": "Deliver 2"
+    },
+    {
+      "cases": [
+        "current.wire_identity_is_mapped"
+      ],
+      "checks": [],
+      "reasons": [],
+      "requirement": "the frozen route derives identity from the server mapping only",
+      "row_id": "D2.wire_identity_is_server_derived",
+      "satisfied": true,
+      "source": "Deliver 2"
+    },
+    {
+      "cases": [
+        "current.mapped_permission_required_for_release",
+        "current.public_release_entry_point"
+      ],
+      "checks": [],
+      "reasons": [],
+      "requirement": "current release requires the mapped current principal, project, source, root, path, item permission",
+      "row_id": "D3.current_requires_mapped_permission",
+      "satisfied": true,
+      "source": "Deliver 3"
+    },
+    {
+      "cases": [
+        "history.exact_locator_only",
+        "history.single_locator_argument"
+      ],
+      "checks": [],
+      "reasons": [],
+      "requirement": "exact history accepts only one governed (repository, commit, path) locator",
+      "row_id": "D3.history_single_governed_locator",
+      "satisfied": true,
+      "source": "Deliver 3"
+    },
+    {
+      "cases": [
+        "history.manifest_required",
+        "history.classification_mismatch",
+        "history.locator_mismatch",
+        "history.ambiguous_manifest_rules",
+        "history.expired_manifest"
+      ],
+      "checks": [],
+      "reasons": [],
+      "requirement": "exact history additionally requires a versioned historical-release manifest covering principal/project, exact locator and classification",
+      "row_id": "D3.history_requires_versioned_manifest",
+      "satisfied": true,
+      "source": "Deliver 3"
+    },
+    {
+      "cases": [
+        "history.current_permission_required",
+        "history.no_resolver_no_body",
+        "history.exact_object_seam_bounded",
+        "history.no_history_search_or_cache_surface"
+      ],
+      "checks": [],
+      "reasons": [],
+      "requirement": "current visibility, repository reachability, a current receipt or semantic match cannot substitute",
+      "row_id": "D3.no_substitution_for_manifest",
+      "satisfied": true,
+      "source": "Deliver 3"
+    },
+    {
+      "cases": [
+        "history.authorized_release",
+        "history.receipt_binds_release_basis"
+      ],
+      "checks": [
+        "history_receipt_complete"
+      ],
+      "reasons": [],
+      "requirement": "exact-history receipts bind bases/versions/hashes, decisions, mapped identity/scope, locator, classification, blob hash/time, evaluation time and audit id",
+      "row_id": "D4.receipt_binds_everything",
+      "satisfied": true,
+      "source": "Deliver 4"
+    },
+    {
+      "cases": [
+        "history.manifest_required",
+        "history.classification_mismatch",
+        "history.locator_mismatch",
+        "history.ambiguous_manifest_rules",
+        "history.expired_manifest",
+        "history.stale_historical_basis",
+        "history.denied_historical_basis",
+        "history.unmapped_principal_denied",
+        "history.no_body_on_failure",
+        "history.wire_denials_are_non_enumerating"
+      ],
+      "checks": [],
+      "reasons": [],
+      "requirement": "missing, ambiguous, drifted, stale, denied or mismatched bases return non-enumerating UNKNOWN/unauthorized before body release",
+      "row_id": "D4.non_enumerating_failure_states",
+      "satisfied": true,
+      "source": "Deliver 4"
+    },
+    {
+      "cases": [
+        "current.wire_identity_is_mapped",
+        "current.wire_owner_handshake",
+        "history.wire_release_capable",
+        "history.wire_denials_are_non_enumerating",
+        "current.wire_repeated_query_rereads"
+      ],
+      "checks": [
+        "wire_required_tools_present",
+        "wire_history_release_capable",
+        "wire_identity_is_mapped",
+        "wire_receipt_keys_within_consumer_allowlist"
+      ],
+      "reasons": [],
+      "requirement": "the frozen persistent-MCP candidate satisfies the full identity/mapping, receipt and exact-history contract on the wire",
+      "row_id": "D5.frozen_candidate_full_contract",
+      "satisfied": true,
+      "source": "Deliver 5"
+    },
+    {
+      "cases": [],
+      "checks": [
+        "artifact_sections_present",
+        "artifact_is_content_free"
+      ],
+      "reasons": [],
+      "requirement": "content-free artifact names owner repository/version, commands, schema/corpus/identity, matrices, receipt fields, no-write result, adapter candidates and final handshake",
+      "row_id": "D7.artifact_fields",
+      "satisfied": true,
+      "source": "Deliver 7"
+    },
+    {
+      "cases": [],
+      "checks": [
+        "tests_test_owner_passes",
+        "tests_test_mcp_passes",
+        "artifact_sections_present"
+      ],
+      "reasons": [],
+      "requirement": "owner artifact validates independently and owner-native tests pass",
+      "row_id": "A1.owner_artifact_validates",
+      "satisfied": true,
+      "source": "Acceptance 1"
+    },
+    {
+      "cases": [
+        "history.current_permission_required",
+        "history.widened_path_denied",
+        "history.unmapped_principal_denied",
+        "history.wire_denials_are_non_enumerating"
+      ],
+      "checks": [],
+      "reasons": [],
+      "requirement": "permission denial occurs before evidence/body work and produces the safe non-enumerating state",
+      "row_id": "A2.denial_before_body",
+      "satisfied": true,
+      "source": "Acceptance 2"
+    },
+    {
+      "cases": [],
+      "checks": [
+        "history_receipt_complete",
+        "current_receipt_complete",
+        "wire_receipt_keys_within_consumer_allowlist"
+      ],
+      "reasons": [],
+      "requirement": "current/history, time, freshness, role/basis and exact-reference receipts map losslessly or fail closed",
+      "row_id": "A3.receipts_map_losslessly_or_fail_closed",
+      "satisfied": true,
+      "source": "Acceptance 3"
+    },
+    {
+      "cases": [
+        "history.seam_has_no_search_or_timeout"
+      ],
+      "checks": [
+        "owner_seam_recovery_surface"
+      ],
+      "reasons": [],
+      "requirement": "REC-08 crash/version/schema/corpus/timeout/cancel cases behave deterministically",
+      "row_id": "A4.deterministic_recovery_cases",
+      "satisfied": true,
+      "source": "Acceptance 4"
+    },
+    {
+      "cases": [
+        "current.wire_repeated_query_rereads"
+      ],
+      "checks": [
+        "current_receipts_persisted_per_call"
+      ],
+      "reasons": [],
+      "requirement": "repeated current queries re-read lee-kb; an older observation cannot satisfy them",
+      "row_id": "A5.repeated_queries_reread",
+      "satisfied": true,
+      "source": "Acceptance 5"
+    },
+    {
+      "cases": [
+        "history.no_history_search_or_cache_surface"
+      ],
+      "checks": [
+        "no_write_holds"
+      ],
+      "reasons": [],
+      "requirement": "one production route is live; direct-store fallback, dual-route code and historical search/cache are absent",
+      "row_id": "A6.one_route_no_fallback",
+      "satisfied": true,
+      "source": "Acceptance 6"
+    }
+  ],
+  "determinism": {
+    "normalized_command_output": "command digests hash normalized output: wall-clock durations, absolute temporary/repository/home paths, timestamps and 32+ hex digests are replaced with stable tokens",
+    "stable_body_scope": "stable_body_sha256 covers the artifact minus volatile_fields and is reproducible on the same toolchain; pytest and Python versions are part of it, so it is machine-specific",
+    "volatile_fields": [
+      "generated_at",
+      "artifact_sha256",
+      "stable_body_sha256",
+      "owner_repository.owner_repository_commit",
+      "owner_repository.dirty",
+      "owner_repository.dirty_file_count"
+    ]
+  },
+  "failure_reasons": [],
+  "generated_at": "2026-08-13T19:44:39Z",
+  "handshake": {
+    "candidate": "lee-kb-mcp stdio",
+    "capabilities": [
+      "tools"
+    ],
+    "console_script_declared": true,
+    "current": {
+      "additive_receipt_keys_outside_consumer_allowlist": [],
+      "payload_keys": [
+        "denied_count",
+        "freshness",
+        "index_state",
+        "receipt_count",
+        "receipts",
+        "results",
+        "truncated"
+      ],
+      "principal_is_configured_owner": false,
+      "principal_is_mapped_principal_id": true,
+      "principal_type_is_mapped_type": true,
+      "receipt_binds_mapping": true,
+      "receipt_count": 1,
+      "receipt_keys": [
+        "audit_id",
+        "chunk_id",
+        "content_hash",
+        "current_policy_decision",
+        "current_policy_hash",
+        "current_policy_version",
+        "freshness_state",
+        "id",
+        "item_id",
+        "knowledge_item_id",
+        "knowledge_state",
+        "mapping_hash",
+        "mapping_version",
+        "path",
+        "principal",
+        "principal_id",
+        "project",
+        "query",
+        "retrieval_timestamp",
+        "root",
+        "source_locator",
+        "source_namespace",
+        "source_ref"
+      ],
+      "repeat_query_returns_new_receipt": true,
+      "result_keys": [
+        "authority",
+        "chunk_id",
+        "commit",
+        "content_hash",
+        "heading",
+        "item_id",
+        "path",
+        "project",
+        "rank",
+        "receipt",
+        "receipt_id",
+        "retrieval_timestamp",
+        "root",
+        "score",
+        "source_content_hash",
+        "source_fragment",
+        "source_label",
+        "source_timestamp",
+        "source_uri",
+        "sync_timestamp",
+        "text",
+        "title",
+        "trust"
+      ]
+    },
+    "executable_token": "lee-kb-mcp",
+    "exit_code": 0,
+    "history": {
+      "body_released": true,
+      "denials_are_indistinguishable": true,
+      "denials_release_no_body": true,
+      "denied_states": [
+        "unknown"
+      ],
+      "freshness_state": "fresh",
+      "identity_argument_rejected": true,
+      "is_error": false,
+      "knowledge_state": "known",
+      "listed_receipt_keys_outside_consumer_allowlist": [],
+      "payload_keys": [
+        "body",
+        "freshness_state",
+        "knowledge_state",
+        "receipt",
+        "receipts"
+      ],
+      "receipt_keys": [
+        "audit_id",
+        "blob_hash",
+        "blob_timestamp",
+        "classification",
+        "commit",
+        "current_policy_decision",
+        "current_policy_hash",
+        "current_policy_version",
+        "evaluation_time",
+        "freshness_state",
+        "historical_manifest_hash",
+        "historical_policy_decision",
+        "historical_policy_hash",
+        "historical_policy_version",
+        "item_id",
+        "knowledge_state",
+        "mapping_hash",
+        "mapping_version",
+        "path",
+        "principal_id",
+        "project",
+        "receipt_id",
+        "repository",
+        "root",
+        "source_namespace",
+        "source_ref"
+      ],
+      "receipt_missing_required": [],
+      "receipt_present": true,
+      "release_capable": true
+    },
+    "owner_handshake_fields_exposed": [
+      "api_version",
+      "contract_version",
+      "corpus_version",
+      "historical_version",
+      "mapping_hash",
+      "mapping_version",
+      "owner",
+      "permission_version",
+      "receipt_version",
+      "schema_version"
+    ],
+    "owner_handshake_fields_required": [
+      "api_version",
+      "contract_version",
+      "corpus_version",
+      "historical_version",
+      "mapping_hash",
+      "mapping_version",
+      "owner",
+      "permission_version",
+      "receipt_version",
+      "schema_version"
+    ],
+    "owner_handshake_matches_owner_versions": true,
+    "probe_argv": [
+      "python3",
+      "-m",
+      "lee_kb.mcp"
+    ],
+    "probe_env_keys": [
+      "LANG",
+      "LC_ALL",
+      "LEE_KB_CONFIG",
+      "PATH",
+      "PYTHONPATH"
+    ],
+    "probe_error": null,
+    "probe_ok": true,
+    "protocol_version": "2025-06-18",
+    "required_tools": [
+      "kb_history_get",
+      "kb_search"
+    ],
+    "required_tools_present": true,
+    "server_name": "lee-kb",
+    "server_version": "0.1.0",
+    "tools": [
+      "kb_compile_preview",
+      "kb_history_get",
+      "kb_search",
+      "kb_status"
+    ]
+  },
+  "identity_mapping": {
+    "authenticated_principal": "lee",
+    "client_supplied_identity_fields": [],
+    "grants_are_deployment_configuration": true,
+    "lane": "default",
+    "mapping_hash": "5bd64b3b4ebafa5c63262f5acf1072227330ebf2ad3708b329d78b72e424b483",
+    "mapping_hash_algorithm": "sha256(json.dumps(body,sort_keys=True,separators=(',',':'),ensure_ascii=False))",
+    "mapping_hash_body_keys": [
+      "authenticated_principal",
+      "grants",
+      "lane",
+      "principal_id",
+      "purpose",
+      "scope_id",
+      "tenant",
+      "version"
+    ],
+    "mapping_hash_matches_consumer_algorithm": true,
+    "mapping_hash_scope": "identity fields with an empty grant tuple",
+    "mapping_version": "lee-kb.owner.mapping/v1",
+    "principal_id": "lee@leebase.com",
+    "principal_type": "ai_employee",
+    "purpose": "knowledge",
+    "scope_id": "leeos",
+    "tenant": "leebase"
+  },
+  "mutation_probes": [
+    {
+      "applied": true,
+      "detected": true,
+      "effective": true,
+      "file": null,
+      "mutation": "baseline",
+      "suite": "tests/test_owner.py",
+      "suite_returncode": 0
+    },
+    {
+      "applied": true,
+      "detected": true,
+      "effective": true,
+      "file": "src/lee_kb/contracts.py",
+      "mutation": "mapping_admits_any_authenticated_principal",
+      "suite": "tests/test_owner.py",
+      "suite_returncode": 1
+    },
+    {
+      "applied": true,
+      "detected": true,
+      "effective": true,
+      "file": "src/lee_kb/contracts.py",
+      "mutation": "mapping_admits_ungranted_project",
+      "suite": "tests/test_owner.py",
+      "suite_returncode": 1
+    },
+    {
+      "applied": true,
+      "detected": true,
+      "effective": true,
+      "file": "src/lee_kb/contracts.py",
+      "mutation": "grant_ignores_path_prefix",
+      "suite": "tests/test_owner.py",
+      "suite_returncode": 1
+    },
+    {
+      "applied": true,
+      "detected": true,
+      "effective": true,
+      "file": "src/lee_kb/contracts.py",
+      "mutation": "manifest_ignores_classification",
+      "suite": "tests/test_owner.py",
+      "suite_returncode": 1
+    },
+    {
+      "applied": true,
+      "detected": true,
+      "effective": true,
+      "file": "src/lee_kb/contracts.py",
+      "mutation": "manifest_ignores_locator",
+      "suite": "tests/test_owner.py",
+      "suite_returncode": 1
+    },
+    {
+      "applied": true,
+      "detected": true,
+      "effective": true,
+      "file": "src/lee_kb/governance.py",
+      "mutation": "history_skips_current_permission_gate",
+      "suite": "tests/test_owner.py",
+      "suite_returncode": 1
+    },
+    {
+      "applied": true,
+      "detected": true,
+      "effective": true,
+      "file": "src/lee_kb/owner.py",
+      "mutation": "mapped_current_evaluator_always_permits",
+      "suite": "tests/test_owner.py",
+      "suite_returncode": 1
+    }
+  ],
+  "no_write": {
+    "cycle_steps": [
+      {
+        "argv": [
+          "python3",
+          "-m",
+          "lee_kb.main",
+          "sync"
+        ],
+        "returncode": 0,
+        "step": "cli_sync"
+      },
+      {
+        "argv": [
+          "python3",
+          "-m",
+          "lee_kb.main",
+          "search",
+          "<query>",
+          "--project",
+          "default"
+        ],
+        "returncode": 0,
+        "step": "cli_search"
+      },
+      {
+        "argv": [
+          "python3",
+          "-m",
+          "lee_kb.mcp"
+        ],
+        "returncode": 0,
+        "step": "mcp_stdio_probe"
+      },
+      {
+        "argv": [
+          "<in-process>",
+          "owner.OwnerGateway.retrieve_history"
+        ],
+        "returncode": 0,
+        "step": "owner_retrieve_history"
+      }
+    ],
+    "owner_history": {
+      "knowledge_state": "known",
+      "receipt_bound": true,
+      "seam": "owner.OwnerGateway.retrieve_history"
+    },
+    "persisted_current_receipts": 2,
+    "proof": {
+      "corpus_digest": "13021aee1eee3f87eca27402b6ceef9651924e70b78c35a7bdf29982f356f2fd",
+      "corpus_digest_stable": true,
+      "corpus_file_count": 2,
+      "corpus_unchanged": true,
+      "digest_algorithm": "sha256 over sorted 'relative-name:sha256' lines"
+    }
+  },
+  "owner_repository": {
+    "console_scripts": {
+      "lee-kb": "lee_kb.main:main",
+      "lee-kb-mcp": "lee_kb.mcp:main"
+    },
+    "contract_document": "docs/s1c-owner-contract.md",
+    "dirty": true,
+    "dirty_file_count": 59,
+    "generator": "tools/produce_s1c_owner_evidence.py",
+    "name": "lee-kb",
+    "owner_repository_commit": "f3266a88e7aadb7eaf51779a3c1fed1bc0e0ad08",
+    "package_version": "0.1.0"
+  },
+  "permission_matrices": {
+    "current": [
+      {
+        "case_id": "current.mapped_principal_admitted",
+        "evidence": "behavioural",
+        "expectation": "authenticated principal lee maps server-side to lee@leebase.com with no client groups",
+        "expected": "lee->lee@leebase.com|ai_employee|groups=0",
+        "mutation": "mapping_admits_any_authenticated_principal",
+        "mutation_detected": true,
+        "observed": "lee->lee@leebase.com|ai_employee|groups=0",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_mapping_is_server_owned_and_client_identity_cannot_widen",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "current.unmapped_principal_denied",
+        "evidence": "behavioural",
+        "expectation": "any principal other than the mapped one is denied without enumeration",
+        "expected": "PermissionError",
+        "mutation": "mapping_admits_any_authenticated_principal",
+        "mutation_detected": true,
+        "observed": "PermissionError",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_mapping_is_server_owned_and_client_identity_cannot_widen",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "current.client_cannot_send_identity_fields",
+        "evidence": "behavioural",
+        "expectation": "no wire argument can carry principal, groups, grants or scope; every tool schema is closed",
+        "expected": "identity_fields=none|closed_schemas=True",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "identity_fields=none|closed_schemas=True",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_mcp.py::test_tool_surface_matches_kb_index_contract",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "current.widened_project_rejected",
+        "evidence": "behavioural",
+        "expectation": "a request cannot select a project that is not explicitly granted",
+        "expected": "PermissionError",
+        "mutation": "mapping_admits_ungranted_project",
+        "mutation_detected": true,
+        "observed": "PermissionError",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_ungranted_project_is_rejected_before_retrieval",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "current.widened_scope_rejected",
+        "evidence": "behavioural",
+        "expectation": "source namespace, root, path and item outside the server grant are refused",
+        "expected": "granted=True|denied=item,namespace,path,root",
+        "mutation": "grant_ignores_path_prefix",
+        "mutation_detected": true,
+        "observed": "granted=True|denied=item,namespace,path,root",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_grants_narrow_namespace_root_path_and_item",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "current.multi_project_requires_explicit_grant",
+        "evidence": "behavioural",
+        "expectation": "multi-project mapping needs an explicit project and yields per-project grants",
+        "expected": "implicit=PermissionError|projects=default,second|grants=1,1",
+        "mutation": "mapping_admits_ungranted_project",
+        "mutation_detected": true,
+        "observed": "implicit=PermissionError|projects=default,second|grants=1,1",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_multi_project_requires_one_explicit_granted_project",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "current.mapped_permission_required_for_release",
+        "evidence": "behavioural",
+        "expectation": "current release requires the mapped principal plus the granted source, root, path, and item",
+        "expected": "in_grant=True|out_of_grant=False|out_of_root=False|other_principal=False",
+        "mutation": "mapped_current_evaluator_always_permits",
+        "mutation_detected": true,
+        "observed": "in_grant=True|out_of_grant=False|out_of_root=False|other_principal=False",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_current_release_requires_the_mapped_permission",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "current.public_release_entry_point",
+        "evidence": "structural",
+        "expectation": "the owner slice exposes a supported current-release entry point the adapter can call",
+        "expected": "public_current_release=retrieve_current",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "public_current_release=retrieve_current",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_current_release_requires_the_mapped_permission",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "current.owner_handshake_complete",
+        "evidence": "behavioural",
+        "expectation": "the owner slice publishes every version, the mapping hash, and the permission and receipt versions the consumer compares",
+        "expected": "fields=api_version,contract_version,corpus_version,historical_version,mapping_hash,mapping_version,owner,permission_version,receipt_version,schema_version|mapping_hash_bound=True",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "fields=api_version,contract_version,corpus_version,historical_version,mapping_hash,mapping_version,owner,permission_version,receipt_version,schema_version|mapping_hash_bound=True",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_owner_handshake_names_every_version",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "current.wire_identity_is_mapped",
+        "evidence": "structural",
+        "expectation": "the frozen stdio route derives identity from the server mapping, not from configuration",
+        "expected": "mapped_principal=True|mapped_type=True|binds_mapping=True|configured_owner=False",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "mapped_principal=True|mapped_type=True|binds_mapping=True|configured_owner=False",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_mcp.py::test_owner_gateway_search_identity_comes_from_the_server_mapping",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "current.wire_owner_handshake",
+        "evidence": "structural",
+        "expectation": "initialize publishes the owner handshake, so the frozen route can see owner-side version drift",
+        "expected": "fields=api_version,contract_version,corpus_version,historical_version,mapping_hash,mapping_version,owner,permission_version,receipt_version,schema_version|matches_owner_versions=True",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "fields=api_version,contract_version,corpus_version,historical_version,mapping_hash,mapping_version,owner,permission_version,receipt_version,schema_version|matches_owner_versions=True",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_mcp.py::test_initialize_publishes_the_owner_handshake_in_owner_gateway_mode",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "current.wire_repeated_query_rereads",
+        "evidence": "behavioural",
+        "expectation": "a repeated current query re-reads lee-kb and produces a new receipt",
+        "expected": "new_receipt=True",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "new_receipt=True",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_mcp.py::test_kb_search_preserves_result_shape_and_attaches_receipts",
+        "test_returncode": 0
+      }
+    ],
+    "history": [
+      {
+        "case_id": "history.exact_locator_only",
+        "evidence": "behavioural",
+        "expectation": "only an exact (repository, commit, path) locator is accepted; patterns and refs are refused",
+        "expected": "rejected=pattern,traversal,absolute,short-commit,branch-ref",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "rejected=pattern,traversal,absolute,short-commit,branch-ref",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_exact_locator_rejects_patterns_traversal_and_refs",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.single_locator_argument",
+        "evidence": "structural",
+        "expectation": "exactly one governed locator per call, with a closed wire schema",
+        "expected": "wire_required=classification,commit,path,repository|wire_closed=True|seam_locator_param=True|seam_multi_locator_params=none",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "wire_required=classification,commit,path,repository|wire_closed=True|seam_locator_param=True|seam_multi_locator_params=none",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": null,
+        "test_returncode": null
+      },
+      {
+        "case_id": "history.authorized_release",
+        "evidence": "behavioural",
+        "expectation": "a doubly authorized exact locator releases the immutable body with a receipt",
+        "expected": "known|body|receipt|no-reason",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "known|body|receipt|no-reason",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_exact_success_has_complete_receipt_and_immutable_hash",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.receipt_binds_release_basis",
+        "evidence": "behavioural",
+        "expectation": "the exact-history receipt binds bases, versions, hashes, locator, blob hash/time, evaluation time and audit id",
+        "expected": "audit=True|manifest_hash=True|blob=True|blob_time=True|eval_time=True|current=allow|history=allow|locator=True|freshness=fresh",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "audit=True|manifest_hash=True|blob=True|blob_time=True|eval_time=True|current=allow|history=allow|locator=True|freshness=fresh",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_exact_success_has_complete_receipt_and_immutable_hash",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.manifest_required",
+        "evidence": "behavioural",
+        "expectation": "no versioned historical-release manifest means non-enumerating UNKNOWN and no body",
+        "expected": "unknown|no-body|receipt|no-reason",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "unknown|no-body|receipt|no-reason",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_missing_manifest_and_mismatched_classification_release_no_body",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.classification_mismatch",
+        "evidence": "behavioural",
+        "expectation": "a classification the manifest does not cover returns UNKNOWN and no body",
+        "expected": "unknown|no-body|receipt|no-reason",
+        "mutation": "manifest_ignores_classification",
+        "mutation_detected": true,
+        "observed": "unknown|no-body|receipt|no-reason",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_missing_manifest_and_mismatched_classification_release_no_body",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.locator_mismatch",
+        "evidence": "behavioural",
+        "expectation": "a locator the manifest does not cover returns UNKNOWN and no body",
+        "expected": "unknown|no-body|receipt|no-reason",
+        "mutation": "manifest_ignores_locator",
+        "mutation_detected": true,
+        "observed": "unknown|no-body|receipt|no-reason",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_locator_outside_the_manifest_releases_no_body",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.ambiguous_manifest_rules",
+        "evidence": "behavioural",
+        "expectation": "ambiguous manifest coverage fails closed to UNKNOWN",
+        "expected": "unknown|no-body|receipt|no-reason",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "unknown|no-body|receipt|no-reason",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_ambiguous_manifest_rules_release_no_body",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.expired_manifest",
+        "evidence": "behavioural",
+        "expectation": "an expired manifest fails closed to UNKNOWN",
+        "expected": "unknown|no-body|receipt|no-reason",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "unknown|no-body|receipt|no-reason",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_expired_manifest_releases_no_body",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.stale_historical_basis",
+        "evidence": "behavioural",
+        "expectation": "a stale historical basis fails closed to UNKNOWN",
+        "expected": "unknown|no-body|receipt|no-reason",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "unknown|no-body|receipt|no-reason",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_stale_historical_basis_releases_no_body",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.denied_historical_basis",
+        "evidence": "behavioural",
+        "expectation": "a denied historical basis returns the unauthorized state with no body",
+        "expected": "unauthorized|no-body|receipt|no-reason",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "unauthorized|no-body|receipt|no-reason",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_history_requires_current_and_historical_policy_bases",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.current_permission_required",
+        "evidence": "behavioural",
+        "expectation": "current permission is required for history and the body seam is never touched without it",
+        "expected": "deny=unknown|no-body|receipt|no-reason|absent=unknown|no-body|receipt|no-reason|resolver_calls=0",
+        "mutation": "history_skips_current_permission_gate",
+        "mutation_detected": true,
+        "observed": "deny=unknown|no-body|receipt|no-reason|absent=unknown|no-body|receipt|no-reason|resolver_calls=0",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_history_requires_current_and_historical_policy_bases",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.no_resolver_no_body",
+        "evidence": "behavioural",
+        "expectation": "repository reachability cannot substitute: without the exact-object seam there is no body",
+        "expected": "unknown|no-body|receipt|no-reason",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "unknown|no-body|receipt|no-reason",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_absent_resolver_releases_no_body",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.exact_object_seam_bounded",
+        "evidence": "behavioural",
+        "expectation": "the supported exact-object seam reads one allowlisted named object and refuses everything else",
+        "expected": "released=True|unlisted=True|unknown_commit=True|oversized=True|unclassified=True",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "released=True|unlisted=True|unknown_commit=True|oversized=True|unclassified=True",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_git_exact_object_resolver_reads_exactly_one_named_object",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.widened_path_denied",
+        "evidence": "behavioural",
+        "expectation": "a locator path outside the server grant is unauthorized before the body seam",
+        "expected": "unauthorized|no-body|receipt|no-reason|resolver_calls=0",
+        "mutation": "grant_ignores_path_prefix",
+        "mutation_detected": true,
+        "observed": "unauthorized|no-body|receipt|no-reason|resolver_calls=0",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_widened_path_is_denied_before_the_object_seam",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.unmapped_principal_denied",
+        "evidence": "behavioural",
+        "expectation": "an unmapped principal gets UNKNOWN with no receipt and no body seam call",
+        "expected": "unknown|no-body|no-receipt|no-reason|resolver_calls=0",
+        "mutation": "mapping_admits_any_authenticated_principal",
+        "mutation_detected": true,
+        "observed": "unknown|no-body|no-receipt|no-reason|resolver_calls=0",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_unmapped_principal_is_denied_before_the_object_seam",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.no_body_on_failure",
+        "evidence": "behavioural",
+        "expectation": "a non-KNOWN result cannot structurally carry a body",
+        "expected": "body-structurally-blocked",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "body-structurally-blocked",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_owner.py::test_missing_manifest_and_mismatched_classification_release_no_body",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.seam_has_no_search_or_timeout",
+        "evidence": "structural",
+        "expectation": "the history seam has no search or cache input; timeout/cancel are not owner-side concerns",
+        "expected": "init=clock,current_permission,manifest,mapping,resolver|timeout_or_cancel=none",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "init=clock,current_permission,manifest,mapping,resolver|timeout_or_cancel=none",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": null,
+        "test_returncode": null
+      },
+      {
+        "case_id": "history.no_history_search_or_cache_surface",
+        "evidence": "behavioural",
+        "expectation": "no historical search or cache tool exists beside the exact-reference tool",
+        "expected": "extra_history_tools=none",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "extra_history_tools=none",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_mcp.py::test_tool_surface_matches_kb_index_contract",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.wire_release_capable",
+        "evidence": "structural",
+        "expectation": "the frozen stdio route releases an authorized exact-history body with a complete receipt",
+        "expected": "release_capable=True|receipt=True|receipt_complete=True",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "release_capable=True|receipt=True|receipt_complete=True",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_mcp.py::test_owner_gateway_releases_one_exact_history_object_with_its_receipt",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.wire_denials_are_non_enumerating",
+        "evidence": "structural",
+        "expectation": "every withheld basis answers identically over the frozen route, with no body and no receipt",
+        "expected": "states=unknown|no_body=True|identical=True",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "states=unknown|no_body=True|identical=True",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": "tests/test_mcp.py::test_owner_gateway_history_denials_are_identical_and_release_no_body",
+        "test_returncode": 0
+      },
+      {
+        "case_id": "history.wire_rejects_identity_arguments",
+        "evidence": "structural",
+        "expectation": "the frozen stdio route rejects any extra client argument, so transport cannot confer identity",
+        "expected": "extra_identity_argument_rejected=True",
+        "mutation": null,
+        "mutation_detected": null,
+        "observed": "extra_identity_argument_rejected=True",
+        "outcome": "satisfied",
+        "reasons": [],
+        "test_id": null,
+        "test_returncode": null
+      }
+    ]
+  },
+  "provenance": {
+    "content_free": "no source content, question text, corpus path lists or evidence bodies are included; only lee-kb's own root-relative file names, symbol names, test ids, schema key names, digests, counts and booleans",
+    "contract_document": "docs/s1c-owner-contract.md",
+    "evidence_basis": "every matrix row is computed from an in-process behaviour probe, a focused pytest run and, where a rule must be test-defended, a mutation probe applied to a private copy of the package",
+    "generator": "tools/produce_s1c_owner_evidence.py"
+  },
+  "receipt_fields": {
+    "access_audit_event": [
+      "event_type",
+      "timestamp",
+      "client_id",
+      "session_id",
+      "principal",
+      "tenant",
+      "project",
+      "operation",
+      "outcome",
+      "reason_code",
+      "grant_ids",
+      "query_digest",
+      "freshness_state"
+    ],
+    "consumer_receipt_allowlist": [
+      "audit_id",
+      "blob_hash",
+      "blob_timestamp",
+      "current_policy_decision",
+      "current_policy_hash",
+      "current_policy_version",
+      "evaluation_time",
+      "freshness_state",
+      "historical_manifest_hash",
+      "historical_policy_decision",
+      "historical_policy_hash",
+      "historical_policy_version",
+      "id",
+      "item_id",
+      "knowledge_state",
+      "mapping_hash",
+      "mapping_version",
+      "path",
+      "principal_id",
+      "project",
+      "receipt_id",
+      "root",
+      "source_namespace",
+      "source_ref"
+    ],
+    "current_bundle": [
+      "request",
+      "evidence",
+      "citations",
+      "receipts",
+      "freshness",
+      "retrieval_timestamp",
+      "retrievers_used",
+      "denied_count",
+      "truncated"
+    ],
+    "current_citation": [
+      "item_id",
+      "chunk_id",
+      "source_locator",
+      "title",
+      "heading",
+      "authority",
+      "trust"
+    ],
+    "current_evidence": [
+      "chunk_id",
+      "project",
+      "text",
+      "citation",
+      "retriever_ranks",
+      "fused_rank",
+      "source_timestamp",
+      "sync_timestamp",
+      "fused_score",
+      "kind"
+    ],
+    "current_freshness_report": [
+      "is_stale",
+      "requirement_satisfied",
+      "oldest_sync_timestamp",
+      "newest_source_timestamp",
+      "staleness",
+      "refreshed"
+    ],
+    "current_query_audit_event": [
+      "query",
+      "retrieval_timestamp",
+      "principal",
+      "project",
+      "candidate_count",
+      "denied_count",
+      "released_count",
+      "truncated",
+      "status",
+      "auth_context"
+    ],
+    "current_retrieval_receipt": [
+      "audit_id",
+      "mapping_version",
+      "mapping_hash",
+      "principal",
+      "project",
+      "knowledge_item_id",
+      "chunk_id",
+      "content_hash",
+      "source_locator",
+      "source_namespace",
+      "root",
+      "path",
+      "item_id",
+      "classification",
+      "policy_version",
+      "policy_hash",
+      "policy_decision",
+      "freshness_state",
+      "knowledge_state",
+      "retrieval_timestamp",
+      "contract_version",
+      "schema_version",
+      "corpus_version",
+      "receipt_version"
+    ],
+    "current_retrieval_receipt_missing_required": [],
+    "historical_lookup_result": [
+      "knowledge_state",
+      "freshness_state",
+      "body",
+      "receipt",
+      "error"
+    ],
+    "historical_receipt": [
+      "audit_id",
+      "mapping_version",
+      "mapping_hash",
+      "mapped_principal_id",
+      "mapped_principal_type",
+      "authenticated_principal",
+      "tenant",
+      "lane",
+      "scope_id",
+      "purpose",
+      "project",
+      "source_namespace",
+      "root",
+      "path",
+      "item_id",
+      "locator",
+      "classification",
+      "current_policy_version",
+      "current_policy_hash",
+      "current_policy_decision",
+      "historical_policy_version",
+      "historical_policy_hash",
+      "historical_policy_decision",
+      "historical_manifest_hash",
+      "blob_hash",
+      "blob_timestamp",
+      "evaluation_time",
+      "freshness_state",
+      "knowledge_state",
+      "contract_version",
+      "schema_version",
+      "corpus_version"
+    ],
+    "historical_receipt_missing_required": [],
+    "history_receipt_wire_required": [
+      "receipt_id",
+      "audit_id",
+      "mapping_version",
+      "mapping_hash",
+      "principal_id",
+      "project",
+      "repository",
+      "commit",
+      "path",
+      "classification",
+      "current_policy_version",
+      "current_policy_hash",
+      "current_policy_decision",
+      "historical_policy_version",
+      "historical_policy_hash",
+      "historical_policy_decision",
+      "historical_manifest_hash",
+      "blob_hash",
+      "blob_timestamp",
+      "evaluation_time",
+      "freshness_state"
+    ],
+    "persisted_retrieval_receipt": [
+      "knowledge_item_id",
+      "chunk_id",
+      "content_hash",
+      "source_locator",
+      "retrieval_timestamp",
+      "principal",
+      "project",
+      "query",
+      "auth_context"
+    ]
+  },
+  "stable_body_sha256": "5f4085ca2b148967db75af6fe3b254f956ef198804a636943ebf1abe48a96c64",
+  "status": "accepted",
+  "symbol_locations": [
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 1060,
+      "symbol": "contracts.OwnerIdentityMapping"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 1125,
+      "symbol": "contracts.OwnerIdentityMapping.resolve"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 1157,
+      "symbol": "contracts.OwnerIdentityMapping.permits"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 1018,
+      "symbol": "contracts.MappedIdentity"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 959,
+      "symbol": "contracts.SourceGrant"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 996,
+      "symbol": "contracts.SourceGrant.permits"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 933,
+      "symbol": "contracts.HistoricalLocator"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 1209,
+      "symbol": "contracts.HistoricalReleaseRule"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 1259,
+      "symbol": "contracts.HistoricalReleaseManifest"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 1317,
+      "symbol": "contracts.HistoricalReleaseManifest.evaluate"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 1344,
+      "symbol": "contracts.ImmutableHistoricalObject"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 1366,
+      "symbol": "contracts.HistoricalReceipt"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 1504,
+      "symbol": "contracts.HistoricalLookupResult"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 643,
+      "symbol": "contracts.RetrievalReceipt"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 1178,
+      "symbol": "contracts.PolicyBasis"
+    },
+    {
+      "file": "src/lee_kb/governance.py",
+      "line": 308,
+      "symbol": "governance.ExactHistoricalReader"
+    },
+    {
+      "file": "src/lee_kb/governance.py",
+      "line": 341,
+      "symbol": "governance.ExactHistoricalReader.lookup"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 1534,
+      "symbol": "contracts.OwnerCurrentReceipt"
+    },
+    {
+      "file": "src/lee_kb/contracts.py",
+      "line": 1652,
+      "symbol": "contracts.OwnerCurrentResult"
+    },
+    {
+      "file": "src/lee_kb/owner.py",
+      "line": 603,
+      "symbol": "owner.OwnerGateway"
+    },
+    {
+      "file": "src/lee_kb/owner.py",
+      "line": 639,
+      "symbol": "owner.OwnerGateway.map_identity"
+    },
+    {
+      "file": "src/lee_kb/owner.py",
+      "line": 650,
+      "symbol": "owner.OwnerGateway.retrieve_current"
+    },
+    {
+      "file": "src/lee_kb/owner.py",
+      "line": 799,
+      "symbol": "owner.OwnerGateway.retrieve_history"
+    },
+    {
+      "file": "src/lee_kb/owner.py",
+      "line": 113,
+      "symbol": "owner._MappedPermissionEvaluator"
+    },
+    {
+      "file": "src/lee_kb/owner.py",
+      "line": 485,
+      "symbol": "owner.GitExactObjectResolver"
+    },
+    {
+      "file": "src/lee_kb/owner.py",
+      "line": 167,
+      "symbol": "owner.OwnerGatewayConfig"
+    },
+    {
+      "file": "src/lee_kb/owner.py",
+      "line": 421,
+      "symbol": "owner.load_owner_gateway"
+    },
+    {
+      "file": "src/lee_kb/owner.py",
+      "line": 82,
+      "symbol": "owner.owner_handshake"
+    },
+    {
+      "file": "src/lee_kb/mcp.py",
+      "line": 1550,
+      "symbol": "mcp._tool_kb_history_get"
+    },
+    {
+      "file": "src/lee_kb/mcp.py",
+      "line": 1305,
+      "symbol": "mcp._handle_initialize"
+    },
+    {
+      "file": "src/lee_kb/mcp.py",
+      "line": 1278,
+      "symbol": "mcp._owner_bundle"
+    },
+    {
+      "file": "src/lee_kb/mcp.py",
+      "line": 315,
+      "symbol": "mcp._runtime"
+    }
+  ],
+  "version": "lee-kb.owner.acceptance/v1",
+  "versions": {
+    "access_policy_version": "lee-kb.access.policy/v1",
+    "mcp_protocol_version": "2025-06-18",
+    "owner_api_version": "lee-kb.owner.api/v1",
+    "owner_contract_version": "lee-kb.owner.contract/v1",
+    "owner_corpus_version": "lee-kb.owner.corpus/v1",
+    "owner_historical_release_version": "lee-kb.owner.historical-release/v1",
+    "owner_mapping_version": "lee-kb.owner.mapping/v1",
+    "owner_schema_version": "lee-kb.owner.schema/v1",
+    "projection_schema_version": 2,
+    "python_version": "3.12.3"
+  }
+}

@@ -165,9 +165,13 @@ require a concrete product need before planning or implementation.
 
 ## Current Status
 
-**Phase:** Phase 0 complete; Phase 1 complete; Phase 2 queued
+**Phase:** Phase 0 complete; Phase 1 complete; governed retrieval, answer
+assembly, and the source-bounded synthesis-provider core are delivered. Live
+provider wiring remains approval-gated.
 **Mode:** Collaborative implementation with human approval
-**Next milestone:** Prove the connector boundary and capability matrix for the
-personal connector expansion
+**Next milestone:** Approve the exact synthesis client/model/route and wire an
+opt-in live path without weakening deterministic retrieval or answer metadata.
+**Roadmap:** Phase 2 queued after the live synthesis approval gate; the next
+slice must preserve deterministic retrieval and governed answer metadata.
 
 *Keep this document strategic; put task-level changes in `sprint-plan.md`.*

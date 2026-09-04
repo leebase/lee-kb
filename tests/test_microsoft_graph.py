@@ -147,6 +147,20 @@ def make_graph_client(http: ScriptedHttp, manager=None, **kwargs) -> GraphClient
     return client
 
 
+def make_outlook_connector(http: ScriptedHttp) -> OutlookConnector:
+    return OutlookConnector(
+        OutlookScope(
+            "lee@example.test",
+            "folder-inbox",
+            project="default",
+            account_id="personal",
+            tenant="common",
+            credential_binding=credential().binding,
+        ),
+        GraphOutlookTransport(make_graph_client(http)),
+    )
+
+
 def test_token_repr_and_encrypted_file_store_never_write_plaintext(tmp_path) -> None:
     token_store = EncryptedFileTokenStore(tmp_path / "tokens.json", b"k" * 32)
     token_store.save("personal", token())
@@ -1144,6 +1158,130 @@ def test_live_outlook_path_persists_projection_and_empty_cursor_round(tmp_path) 
     assert cursor_after_first != cursor_after_second
     assert stored is not None
     assert stored.document_type.value == "email"
+
+
+def test_token_shaped_new_outlook_item_is_excluded_and_advances_cursor(
+    tmp_path,
+) -> None:
+    leaked = graph_message(body="credential leaked: sk-" + "a" * 24)
+    connector = make_outlook_connector(
+        ScriptedHttp(
+            [
+                response(
+                    200,
+                    {
+                        "value": [leaked],
+                        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta-1",
+                    },
+                ),
+                response(200, leaked),
+                response(
+                    200,
+                    {
+                        "value": [],
+                        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta-2",
+                    },
+                ),
+            ]
+        )
+    )
+
+    with SQLiteRepository(tmp_path / "knowledge.sqlite") as repository:
+        first = _sync_external_connector(connector, repository, sync_timestamp=NOW)
+        first_cursor = repository.get_connector_cursor(connector.connector_id)
+        second = _sync_external_connector(
+            connector,
+            repository,
+            sync_timestamp=NOW + timedelta(minutes=1),
+        )
+        second_cursor = repository.get_connector_cursor(connector.connector_id)
+        stored = repository.get_item(
+            KnowledgeItemId(connector.connector_id, "message:immutable-1")
+        )
+
+    assert first.skipped_token_content == 1
+    assert first.created == 0
+    assert first.unchanged == 0
+    assert second.unchanged == 1
+    assert first_cursor != second_cursor
+    assert second_cursor is not None
+    assert json.loads(second_cursor)["delta_link"].endswith("/delta-2")
+    assert stored is None
+
+
+def test_token_shaped_outlook_update_tombstones_prior_item_and_advances_cursor(
+    tmp_path,
+) -> None:
+    initial = graph_message()
+    leaked = graph_message(body="credential leaked: sk-" + "a" * 24)
+    connector = make_outlook_connector(
+        ScriptedHttp(
+            [
+                response(
+                    200,
+                    {
+                        "value": [initial],
+                        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta-1",
+                    },
+                ),
+                response(200, initial),
+                response(
+                    200,
+                    {
+                        "value": [leaked],
+                        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta-2",
+                    },
+                ),
+                response(200, leaked),
+            ]
+        )
+    )
+
+    with SQLiteRepository(tmp_path / "knowledge.sqlite") as repository:
+        _sync_external_connector(connector, repository, sync_timestamp=NOW)
+        first_cursor = repository.get_connector_cursor(connector.connector_id)
+        summary = _sync_external_connector(
+            connector,
+            repository,
+            sync_timestamp=NOW + timedelta(minutes=1),
+        )
+        second_cursor = repository.get_connector_cursor(connector.connector_id)
+        stored = repository.get_item(
+            KnowledgeItemId(connector.connector_id, "message:immutable-1")
+        )
+
+    assert summary.skipped_token_content == 1
+    assert summary.deleted == 1
+    assert first_cursor != second_cursor
+    assert second_cursor is not None
+    assert json.loads(second_cursor)["delta_link"].endswith("/delta-2")
+    assert stored is not None and stored.tombstone
+
+
+def test_outlook_fetch_failure_still_prevents_cursor_advancement(tmp_path) -> None:
+    item = graph_message()
+    connector = make_outlook_connector(
+        ScriptedHttp(
+            [
+                response(
+                    200,
+                    {
+                        "value": [item],
+                        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta-1",
+                    },
+                ),
+                GraphError(GraphErrorCode.NETWORK),
+            ]
+        )
+    )
+
+    with SQLiteRepository(tmp_path / "knowledge.sqlite") as repository:
+        summary = _sync_external_connector(connector, repository, sync_timestamp=NOW)
+        cursor = repository.get_connector_cursor(connector.connector_id)
+
+    assert summary.skipped == 1
+    assert summary.failure_counts == {"temporarily_inaccessible": 1}
+    assert cursor is None
 
 
 def test_empty_initial_outlook_sync_marks_project_as_synchronized(tmp_path) -> None:

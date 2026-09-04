@@ -93,6 +93,7 @@ def connector_for(transport: ScriptedTransport) -> OutlookConnector:
             folder_id=FOLDER_ID,
             folder_name="Inbox",
             project="personal",
+            allowed_principals=("employee:employee-zero",),
         ),
         transport,
         connector_id="outlook-test",
@@ -522,6 +523,7 @@ def test_fetch_permissions_relationships_health_and_refresh_are_scoped() -> None
     assert refreshed == fetched
     assert permissions.owner == OWNER
     assert permissions.visibility is Visibility.PRIVATE
+    assert permissions.allowed_principals == ("employee:employee-zero",)
     assert connector.relationships("message:message-1") == (
         "conversation:conversation-1",
         "attachment:message-1:attachment-1",

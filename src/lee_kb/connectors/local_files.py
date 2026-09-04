@@ -23,6 +23,8 @@ Configuration shape::
     visibility = "private"    # "private" | "project" | "public", default "private"
     project = "default"       # default DEFAULT_PROJECT
     required = true           # default true; missing path fails health()
+    allowed_principals = []   # extra principals granted by the source owner,
+                               # e.g. ["employee:chief-of-staff"]; default none
 
 Format handlers
 ----------------
@@ -105,6 +107,8 @@ from ..contracts import (
     Authority,
     ChangeType,
     DocumentType,
+    MemoryConfidence,
+    MemoryType,
     PermissionSet,
     SourceLocator,
     Trust,
@@ -133,6 +137,7 @@ __all__ = [
     "RootConfig",
     "DiscoveryReport",
     "contains_token_shaped_secret",
+    "parse_memory_frontmatter",
     "load_config",
     "LocalFilesConnector",
 ]
@@ -144,6 +149,118 @@ _AUTHORITY_BY_VALUE = {member.value: member for member in Authority}
 _TRUST_BY_VALUE = {member.value: member for member in Trust}
 _VISIBILITY_BY_VALUE = {member.value: member for member in Visibility}
 
+#: Files larger than this are never peeked for frontmatter -- a memory
+#: record is always small hand-authored prose, and this bounds the extra
+#: read `permissions()` performs to look for a per-file visibility
+#: override (memories are the only place that override is expected).
+_FRONTMATTER_PEEK_MAX_BYTES = 256 * 1024
+_MEMORY_TYPE_BY_VALUE = {member.value: member for member in MemoryType}
+_MEMORY_CONFIDENCE_BY_VALUE = {member.value: member for member in MemoryConfidence}
+
+
+def _split_frontmatter(text: str) -> tuple[str, str]:
+    """Split a leading ``---`` frontmatter block off ``text``.
+
+    Returns ``(frontmatter_text, remainder)``. ``frontmatter_text`` is
+    ``""`` when no well-formed, terminated frontmatter block starts the
+    document -- the remainder is then the original text, unchanged. This
+    never raises: an ordinary markdown file that happens to open with a
+    horizontal rule (``---``) is common and must never be misparsed or
+    have content silently dropped.
+    """
+    if not text.startswith("---"):
+        return "", text
+    lines = text.split("\n")
+    if lines[0].strip() != "---":
+        return "", text
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            frontmatter = "\n".join(lines[1:index])
+            remainder = "\n".join(lines[index + 1 :])
+            return frontmatter, remainder.lstrip("\n")
+    return "", text
+
+
+def _parse_frontmatter_lines(frontmatter_text: str) -> dict[str, str]:
+    """Parse flat ``key: value`` lines. Unrecognized/malformed lines are ignored.
+
+    Deliberately not a YAML parser (lee-kb is stdlib-only, contracts.py's
+    own design rule) -- the memory frontmatter dialect is intentionally
+    flat: one scalar per line, comma-separated for the one list field
+    (``allowed_principals``).
+    """
+    fields: dict[str, str] = {}
+    for line in frontmatter_text.split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip()
+        value = value.strip()
+        if key and value:
+            fields[key] = value
+    return fields
+
+
+
+def parse_memory_frontmatter(content: str) -> tuple[dict[str, object], str]:
+    """Extract memory metadata from a leading frontmatter block, if present.
+
+    Returns ``(memory_fields, content_without_frontmatter)``. A recognized
+    ``memory_type`` value is required to treat the block as memory
+    frontmatter at all -- an unrecognized or absent ``memory_type`` means
+    "this is not a memory record," and the original ``content`` is
+    returned unchanged (frontmatter for some *other* purpose is left
+    alone, not silently stripped). ``memory_fields`` keys are a subset of:
+    ``memory_type``, ``subject_principal``, ``memory_confidence``,
+    ``importance``, ``memory_formed_at``, ``superseded_by``,
+    ``visibility``, ``allowed_principals``.
+    """
+    frontmatter_text, remainder = _split_frontmatter(content)
+    if not frontmatter_text.strip():
+        return {}, content
+    raw = _parse_frontmatter_lines(frontmatter_text)
+    memory_type = _MEMORY_TYPE_BY_VALUE.get(raw.get("memory_type", ""))
+    if memory_type is None:
+        return {}, content
+    parsed: dict[str, object] = {"memory_type": memory_type}
+    subject = raw.get("subject_principal")
+    if subject:
+        parsed["subject_principal"] = subject
+    confidence = _MEMORY_CONFIDENCE_BY_VALUE.get(raw.get("confidence", ""))
+    if confidence is not None:
+        parsed["memory_confidence"] = confidence
+    importance_raw = raw.get("importance")
+    if importance_raw is not None:
+        try:
+            importance = float(importance_raw)
+        except ValueError:
+            importance = None
+        if importance is not None and 0.0 <= importance <= 1.0:
+            parsed["importance"] = importance
+    formed_at_raw = raw.get("formed_at")
+    if formed_at_raw:
+        try:
+            candidate = formed_at_raw[:-1] + "+00:00" if formed_at_raw.endswith("Z") else formed_at_raw
+            parsed_dt = datetime.fromisoformat(candidate)
+            if parsed_dt.tzinfo is None:
+                parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
+            parsed["memory_formed_at"] = parsed_dt
+        except ValueError:
+            pass
+    superseded_by_raw = raw.get("superseded_by")
+    if superseded_by_raw and superseded_by_raw.lower() not in {"null", "none", "~"}:
+        parsed["superseded_by"] = superseded_by_raw
+    visibility = _VISIBILITY_BY_VALUE.get(raw.get("visibility", ""))
+    if visibility is not None:
+        parsed["visibility"] = visibility
+    allowed_raw = raw.get("allowed_principals", "").strip("[] ")
+    if allowed_raw:
+        parsed["allowed_principals"] = tuple(
+            item.strip() for item in allowed_raw.split(",") if item.strip()
+        )
+    return parsed, remainder
+
 #: Reference-wide exclusions. A root cannot opt these paths back in.
 GLOBAL_DEFAULT_DENY = (
     "code-reviews/**",
@@ -153,12 +270,10 @@ GLOBAL_DEFAULT_DENY = (
     "tmp/**",
     ".kb/**",
     ".git/**",
+    "**/._*",
     "**/~$*.docx",
     "**/~$*.xlsx",
     "**/~$*.pptx",
-    "**/._*.docx",
-    "**/._*.xlsx",
-    "**/._*.pptx",
     "**/.*.docx",
     "**/.*.xlsx",
     "**/.*.pptx",
@@ -199,6 +314,8 @@ _TOP_LEVEL_KEYS = frozenset(
         "workspace_root",
         "microsoft_graph",
         "outlook",
+        "calendar",
+        "owner_gateway",
     }
 )
 _ROOT_KEYS = frozenset(
@@ -213,6 +330,7 @@ _ROOT_KEYS = frozenset(
         "project",
         "required",
         "external",
+        "allowed_principals",
         "overrides",
     }
 )
@@ -286,6 +404,7 @@ class RootConfig:
     project: str = DEFAULT_PROJECT
     required: bool = True
     external: bool = False
+    allowed_principals: tuple[str, ...] = ()
     overrides: tuple[OverrideConfig, ...] = ()
 
     def metadata_for(self, relative_posix: str) -> tuple[Authority, Trust]:
@@ -444,6 +563,15 @@ def _parse_root(name: str, raw: object, root_base: Path) -> RootConfig:
     if not isinstance(external, bool):
         raise ConnectorConfigError(f"root {name!r} has a non-boolean external flag")
 
+    raw_allowed = raw.get("allowed_principals", [])
+    if not isinstance(raw_allowed, list) or not all(
+        isinstance(principal, str) and principal.strip() for principal in raw_allowed
+    ):
+        raise ConnectorConfigError(
+            f"root {name!r} has an invalid allowed_principals list"
+        )
+    allowed_principals = tuple(raw_allowed)
+
     raw_overrides = raw.get("overrides", [])
     if not isinstance(raw_overrides, list):
         raise ConnectorConfigError(f"root {name!r} has an invalid overrides list")
@@ -464,6 +592,7 @@ def _parse_root(name: str, raw: object, root_base: Path) -> RootConfig:
         project=project,
         required=required,
         external=external,
+        allowed_principals=allowed_principals,
         overrides=overrides,
     )
 
@@ -566,6 +695,28 @@ def _office_inventory_reason(
     if not any(_glob_match(relative_posix, pattern) for pattern in include):
         return "out_of_scope"
     return None
+
+
+def _dir_denied(candidate: str, deny_patterns: Sequence[str]) -> bool:
+    """True if a directory path is fully covered by a `**`/`*` deny glob.
+
+    Mirrors the reference `kb-index` implementation's directory pruning
+    (`kb.cli._dir_denied`): a `prefix/**` or `prefix/*` deny pattern denies
+    the directory itself and everything under it, not just files that
+    already match the full glob at the file level.
+    """
+    if any(_glob_match(candidate, pattern) for pattern in deny_patterns):
+        return True
+    for pattern in deny_patterns:
+        if pattern.endswith("/**"):
+            prefix = pattern[:-3]
+            if candidate == prefix or candidate.startswith(prefix + "/"):
+                return True
+        elif pattern.endswith("/*"):
+            prefix = pattern[:-2]
+            if candidate == prefix or candidate.startswith(prefix + "/"):
+                return True
+    return False
 
 
 @dataclass(slots=True)
@@ -698,6 +849,19 @@ class LocalFilesConnector(Connector):
         self._resolved_paths_by_name = {
             root.name: root.path.resolve() for root in self._roots_by_name.values()
         }
+        #: Plain-string posix form of each resolved root, computed once.
+        #: `_claiming_root` is called once per discovered candidate file and
+        #: used to compare against every other configured root; doing that
+        #: comparison via `pathlib.Path.relative_to`/`Path.parents`
+        #: containment checks (each of which reconstructs `PurePath` objects
+        #: internally) measured as the dominant cost of a full-corpus
+        #: `discover()` pass (~90% of wall time profiled against the real
+        #: 15-root, ~1,250-document Employee Zero corpus). Plain string
+        #: prefix comparison is semantically identical for already-resolved,
+        #: normalized posix paths and orders of magnitude cheaper.
+        self._resolved_prefix_by_name = {
+            name: path.as_posix() for name, path in self._resolved_paths_by_name.items()
+        }
         self._nested_roots = _find_nested_roots(tuple(self._roots_by_name.values()))
 
     @classmethod
@@ -746,6 +910,12 @@ class LocalFilesConnector(Connector):
         blocked_source_prefixes: list[str] = []
         git_ignored = 0
         git_unresolved = 0
+        # Computed once per pass, not once per candidate file: `_claiming_root`
+        # previously re-stat'd every other root's directory for every single
+        # discovered candidate.
+        valid_root_names = frozenset(
+            name for name, r in self._roots_by_name.items() if r.path.is_dir()
+        )
         for root in roots:
             if not root.path.is_dir():
                 blocked_source_prefixes.append(f"{root.name}:")
@@ -758,6 +928,9 @@ class LocalFilesConnector(Connector):
                 )
                 continue
             root_base = root.path.resolve()
+            root_base_str = root_base.as_posix()
+            root_path_str = os.fspath(root.path)
+            deny_patterns = GLOBAL_DEFAULT_DENY + tuple(root.exclude)
             candidates: list[tuple[str, Path]] = []
             walk_errors: list[Path] = []
 
@@ -768,16 +941,27 @@ class LocalFilesConnector(Connector):
                     walk_errors.append(root.path)
 
             for directory, directories, filenames in os.walk(
-                root.path, topdown=True, onerror=record_walk_error
+                root_path_str, topdown=True, onerror=record_walk_error
             ):
+                rel_dir = os.path.relpath(directory, root_path_str)
+                if directories:
+                    directories[:] = [
+                        d
+                        for d in directories
+                        if not _dir_denied(
+                            d if rel_dir == "." else f"{rel_dir}/{d}", deny_patterns
+                        )
+                    ]
                 directories.sort()
                 filenames.sort()
                 for filename in filenames:
-                    file_path = Path(directory) / filename
-                    if not file_path.is_file():
+                    file_path = Path(directory, filename)
+                    if not os.path.isfile(file_path):
                         continue
-                    relative = file_path.relative_to(root.path).as_posix()
-                    suffix = file_path.suffix.lower()
+                    relative = (
+                        filename if rel_dir == "." else f"{rel_dir}/{filename}"
+                    )
+                    suffix = os.path.splitext(filename)[1].lower()
                     inventory_reason = _office_inventory_reason(
                         relative, suffix, root.include, root.exclude
                     )
@@ -792,13 +976,19 @@ class LocalFilesConnector(Connector):
                     if not _matches(relative, root.include, root.exclude):
                         continue
                     resolved = file_path.resolve()
-                    if root_base not in resolved.parents and resolved != root_base:
+                    resolved_str = resolved.as_posix()
+                    if (
+                        resolved_str != root_base_str
+                        and not resolved_str.startswith(root_base_str + "/")
+                    ):
                         # Same containment rule as _resolve(): a candidate whose
                         # resolved target escapes its declared root (e.g. a
                         # symlink out of the tree) is never handed out, so
                         # discovery and fetch agree on which objects exist.
                         continue
-                    claiming_root = self._claiming_root(root, resolved)
+                    claiming_root = self._claiming_root(
+                        root, resolved, valid_root_names
+                    )
                     if claiming_root is not root:
                         claimed_by_other_root[claiming_root.name] = (
                             claimed_by_other_root.get(claiming_root.name, 0) + 1
@@ -865,16 +1055,34 @@ class LocalFilesConnector(Connector):
             blocked_source_prefixes=tuple(sorted(set(blocked_source_prefixes))),
         )
 
-    def _claiming_root(self, discovered_root: RootConfig, resolved: Path) -> RootConfig:
-        """Choose the deterministic root identity for one resolved file."""
+    def _claiming_root(
+        self,
+        discovered_root: RootConfig,
+        resolved: Path,
+        valid_root_names: frozenset[str],
+    ) -> RootConfig:
+        """Choose the deterministic root identity for one resolved file.
+
+        Compares plain posix strings, not `pathlib.Path` objects: profiling
+        a full pass against the real ~1,250-document, 15-root corpus showed
+        `Path.relative_to`/`Path.parents` containment checks here as ~90% of
+        total wall time (each call reconstructs `PurePath` internals). Both
+        `resolved` and every cached root prefix are already fully resolved,
+        normalized posix paths, so string equality/prefix comparison is
+        semantically identical and orders of magnitude cheaper.
+        """
+        resolved_str = resolved.as_posix()
         matches = [discovered_root]
-        for root in self._roots_by_name.values():
-            if root is discovered_root or not root.path.is_dir():
+        for name, root in self._roots_by_name.items():
+            if root is discovered_root or name not in valid_root_names:
                 continue
-            root_base = self._resolved_paths_by_name[root.name]
-            if root_base != resolved and root_base not in resolved.parents:
+            root_base_str = self._resolved_prefix_by_name[name]
+            if resolved_str == root_base_str:
+                candidate_relative = ""
+            elif resolved_str.startswith(root_base_str + "/"):
+                candidate_relative = resolved_str[len(root_base_str) + 1 :]
+            else:
                 continue
-            candidate_relative = resolved.relative_to(root_base).as_posix()
             if _matches(candidate_relative, root.include, root.exclude):
                 matches.append(root)
         return min(
@@ -1004,6 +1212,7 @@ class LocalFilesConnector(Connector):
                 "source parser failed", kind=ReadFailureKind.MALFORMED
             ) from error
 
+        memory_fields, content = parse_memory_frontmatter(parsed.content)
         authority, trust = root.metadata_for(relative)
         return FetchedDocument(
             source_object_id=source_object_id,
@@ -1013,13 +1222,19 @@ class LocalFilesConnector(Connector):
                 label=relative,
             ),
             document_type=handler.document_type,
-            content=parsed.content,
+            content=content,
             content_hash=compute_content_hash(raw),
             source_timestamp=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
             project=root.project,
             title=parsed.title or Path(relative).name,
             authority=authority,
             trust=trust,
+            memory_type=memory_fields.get("memory_type"),
+            subject_principal=memory_fields.get("subject_principal"),
+            memory_confidence=memory_fields.get("memory_confidence"),
+            importance=memory_fields.get("importance"),
+            memory_formed_at=memory_fields.get("memory_formed_at"),
+            superseded_by=memory_fields.get("superseded_by"),
         )
 
     def refresh(self, source_object_id: str) -> FetchedDocument:
@@ -1028,8 +1243,29 @@ class LocalFilesConnector(Connector):
         return self.fetch(source_object_id)
 
     def permissions(self, source_object_id: str) -> PermissionSet:
-        root, _relative, _file_path = self._resolve(source_object_id)
-        return PermissionSet(owner=root.owner, visibility=root.visibility)
+        root, _relative, file_path = self._resolve(source_object_id)
+        visibility = root.visibility
+        allowed_principals = root.allowed_principals
+        handler = FORMAT_HANDLERS.get(file_path.suffix.lower())
+        if handler is not None:
+            try:
+                if file_path.stat().st_size <= _FRONTMATTER_PEEK_MAX_BYTES:
+                    parsed = handler.parse_document(file_path.read_bytes())
+                    memory_fields, _content = parse_memory_frontmatter(parsed.content)
+                    visibility = memory_fields.get("visibility", visibility)
+                    allowed_principals = memory_fields.get(
+                        "allowed_principals", allowed_principals
+                    )
+            except (OSError, UnicodeDecodeError, ConnectorReadError):
+                # A per-file permission override is a best-effort refinement
+                # of the root default, never a reason to fail the whole
+                # object -- fall back to the root's own PermissionSet.
+                pass
+        return PermissionSet(
+            owner=root.owner,
+            visibility=visibility,
+            allowed_principals=allowed_principals,
+        )
 
     def relationships(self, source_object_id: str) -> tuple[str, ...]:
         # The local filesystem has no relationship model in v1.
